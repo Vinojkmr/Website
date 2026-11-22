@@ -1,0 +1,116 @@
+[2026-11-21 16:16:19] Vnj (Vnr) ₹6530
+*VK CRACKERS Estimate*
+*Name:* Vnj
+*City:* Vnr
+
+1. 120 Shot Multi Color (1 Pc) x 4 = ₹6080
+2. Ground Chakkar Special (10 Pcs) x 2 = ₹190
+3. Flower Pots Big (10 Pcs) x 4 = ₹260
+
+*Net Total: ₹6530*
+---
+[2026-11-21 18:04:23] VK2163 - Vk (790478524, Vnr) ₹6080
+*VK CRACKERS Estimate (VK2163)*
+*Name:* Vk
+*Phone:* 790478524
+*City:* Vnr
+
+1. 120 Shot Multi Color (1 Pc) x 4 = ₹6080
+
+*Net Total: ₹6080*
+Track Order ID: *VK2163*
+---
+[2026-11-21 18:05:04] VK6307 - Vn (, Vr) ₹7600
+*VK CRACKERS Estimate (VK6307)*
+*Name:* Vn
+*Phone:* 
+*City:* Vr
+
+1. 120 Shot Multi Color (1 Pc) x 1 = ₹1520
+2. 120 Shot Multi Color (1 Pc) x 4 = ₹6080
+
+*Net Total: ₹7600*
+Track Order ID: *VK6307*
+---
+[2026-11-21 18:06:23] VK9369 - Vk (7904785247, Vnr) ₹6080
+*VK CRACKERS Estimate (VK9369)*
+*Name:* Vk
+*Phone:* 7904785247
+*City:* Vnr
+
+1. 120 Shot Multi Color (1 Pc) x 4 = ₹6080
+
+*Net Total: ₹6080*
+Track Order ID: *VK9369*
+---
+[2026-11-22 06:45:38] VK260001 - Fg (9865327410, Vnk) ₹6080
+*VK CRACKERS Estimate (VK260001)*
+*Name:* Fg
+*Phone:* 9865327410
+*City:* Vnk
+
+1. 120 Shot Multi Color (1 Pc) x 4 = ₹6080
+
+*Net Total: ₹6080*
+Track Order ID: *VK260001*
+---
+[2026-11-22 06:53:08] VK260002 - Fg (9865327410, Vnk) ₹6400
+*VK CRACKERS Estimate (VK260002)*
+*Name:* Fg
+*Phone:* 9865327410
+*City:* Vnk
+
+1. 120 Shot Multi Color (1 Pc) x 4 = ₹6080
+2. Ground Chakkar Special (10 Pcs) x 2 = ₹190
+3. Flower Pots Big (10 Pcs) x 2 = ₹130
+
+*Net Total: ₹6400*
+Track Order ID: *VK260002*
+---
+[2026-11-22 06:54:44] VK260003 - Vn (7158963210, Hjnb) ₹6760
+*VK CRACKERS Estimate (VK260003)*
+*Name:* Vn
+*Phone:* 7158963210
+*City:* Hjnb
+
+1. 30 Shot Multi Color (1 Pc) x 5 = ₹2200
+2. 120 Shot Multi Color (1 Pc) x 3 = ₹4560
+
+*Net Total: ₹6760*
+Track Order ID: *VK260003*
+---
+[2026-11-22 07:48:41] VK260004 - Gub (7904785247, Cvg) ₹6080
+*VK CRACKERS Estimate (VK260004)*
+*Name:* Gub
+*Phone:* 7904785247
+*City:* Cvg
+
+1. 120 Shot Multi Color (1 Pc) x 4 = ₹6080
+
+*Net Total: ₹6080*
+Track Order ID: *VK260004*
+---
+[2026-11-22 08:42:38] VK260005 - Fg (8521479630, Dvh) ₹4595
+*VK CRACKERS Estimate (VK260005)*
+*Name:* Fg
+*Phone:* 8521479630
+*City:* Dvh
+
+1. 120 Shot Multi Color (1 Pc) x 1 = ₹1520
+2. 7 Shots Multi Color (5 Pcs) x 3 = ₹435
+3. 30 Shot Multi Color (1 Pc) x 6 = ₹2640
+
+*Net Total: ₹4595*
+Track Order ID: *VK260005*
+---
+[2026-11-22 16:06:35] VK260006 - Gub (9865327410, Cvg) ₹12000
+*VK CRACKERS Quick Estimate (VK260006)*
+*Name:* Gub
+*Phone:* 9865327410
+*City:* Cvg
+
+1. 120 Shot Multi Color (1 Pc) x 8 = ₹12000
+
+*Net Total: ₹12000*
+Track Order ID: *VK260006*
+---
