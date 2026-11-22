@@ -1,0 +1,13 @@
+{
+    "ac_name": "VK Crackers",
+    "ac_no": "000000000000",
+    "ac_type": "Current",
+    "bank_name": "Indian Overseas Bank",
+    "ifsc": "IOBA0000000",
+    "upi": "vkcrackers@upi",
+    "email": "vkcrackers@gmail.com",
+    "address": "Sivakasi Main Road, Sivakasi, Tamil Nadu - 626189",
+    "discount_pct": 90,
+    "min_order": 3000,
+    "disabled_ids": []
+}
