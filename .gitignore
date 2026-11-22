@@ -1,0 +1,14 @@
+# Sensitive configuration & credentials
+db.php
+settings.json
+
+# Customer logs & local backups
+enquiries.txt
+*.log
+*.bak
+
+# OS & Editor temporary files
+.DS_Store
+Thumbs.db
+*.swp
+*~
