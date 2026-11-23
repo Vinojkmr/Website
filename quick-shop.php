@@ -5,12 +5,15 @@ $default_cfg = [
     'ac_name' => 'VK Crackers', 'ac_no' => '000000000000', 'ac_type' => 'Current',
     'bank_name' => 'Indian Overseas Bank', 'ifsc' => 'IOBA0000000', 'upi' => 'vkcrackers@upi',
     'email' => 'vkcrackers@gmail.com', 'address' => 'Sivakasi Main Road, Sivakasi, Tamil Nadu - 626189',
-    'discount_pct' => 80, 'min_order' => (isset($MIN_ORDER) ? (int)$MIN_ORDER : 3000),
+    'discount_pct' => 90, 'min_order' => (isset($MIN_ORDER) ? (int)$MIN_ORDER : 3000),
     'disabled_ids' => []
 ];
 $cfg = file_exists('settings.json') ? array_merge($default_cfg, json_decode(file_get_contents('settings.json'), true)) : $default_cfg;
 $MIN_ORDER = (int)$cfg['min_order'];
 $DISC_PCT = (float)$cfg['discount_pct'];
+if ($DISC_PCT <= 0) {
+    $DISC_PCT = 90;
+}
 $disabled_ids = isset($cfg['disabled_ids']) && is_array($cfg['disabled_ids']) ? array_map('intval', $cfg['disabled_ids']) : [];
 
 $products = [];
@@ -23,7 +26,8 @@ if ($res) {
         }
         $row['id'] = $pid;
         $row['mrp'] = (int)$row['mrp'];
-        $row['price'] = $DISC_PCT > 0 ? (int)round($row['mrp'] - ($row['mrp'] * $DISC_PCT / 100)) : (int)$row['price'];
+        $row['disc_amt'] = (int)round($row['mrp'] * $DISC_PCT / 100);
+        $row['price'] = max(0, $row['mrp'] - $row['disc_amt']);
         $products[] = $row;
     }
 }
@@ -64,12 +68,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['order_data'])) {
             $msg .= $line;
             $items_summary .= $line;
             $pdf_items[] = [
-                'id'    => $p['id'],
-                'name'  => $p['name'],
-                'mrp'   => $p['mrp'],
-                'price' => $p['price'],
-                'qty'   => $q,
-                'sub'   => $sub
+                'id'       => $p['id'],
+                'name'     => $p['name'],
+                'mrp'      => $p['mrp'],
+                'disc_amt' => $p['disc_amt'],
+                'price'    => $p['price'],
+                'qty'      => $q,
+                'sub'      => $sub
             ];
             $i++;
         }
@@ -134,7 +139,7 @@ foreach ($products as $p) {
 
     /* Sticky Live Summary Bar */
     .sticky-summary { position: sticky; top: 0; z-index: 120; background: #fff; border-bottom: 2px solid var(--primary); box-shadow: 0 3px 10px rgba(0,0,0,0.1); padding: 8px 4%; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; }
-    .sum-pills { display: flex; gap: 14px; flex-wrap: wrap; font-size: 13px; }
+    .sum-pills { display: flex; gap: 12px; flex-wrap: wrap; font-size: 13px; }
     .sum-box { background: #f8f9fa; border: 1px solid var(--border); padding: 5px 10px; border-radius: 6px; }
     .sum-box span { color: #555; font-size: 11px; display: block; }
     .sum-box strong { font-size: 15px; }
@@ -150,7 +155,7 @@ foreach ($products as $p) {
 
     .container { max-width: 1100px; margin: 0 auto; padding: 0 3%; }
     .cat-banner { background: linear-gradient(90deg, #2b0509, #780015); color: #fff; padding: 10px 14px; font-weight: bold; font-size: 14px; border-radius: 6px 6px 0 0; margin-top: 18px; display: flex; justify-content: space-between; align-items: center; scroll-margin-top: 75px; }
-    .disc-badge { background: var(--accent); color: #000; padding: 2px 8px; border-radius: 4px; font-size: 12px; }
+    .disc-badge { background: var(--accent); color: #000; padding: 2px 8px; border-radius: 4px; font-size: 12px; font-weight: bold; }
 
     table.qtable { width: 100%; border-collapse: collapse; background: #fff; font-size: 13px; box-shadow: 0 1px 4px rgba(0,0,0,0.05); }
     table.qtable th, table.qtable td { border: 1px solid var(--border); padding: 8px 6px; }
@@ -158,6 +163,7 @@ foreach ($products as $p) {
     .center { text-align: center; }
     .right { text-align: right; }
     .mrp { text-decoration: line-through; color: #888; font-size: 12px; }
+    .disc-amt { color: #2b8a3e; font-weight: 600; font-size: 13px; }
     .price { color: var(--primary); font-weight: bold; font-size: 14px; }
     .qty-inp { width: 58px; padding: 6px; border: 1.5px solid #adb5bd; border-radius: 4px; text-align: center; font-weight: bold; font-size: 14px; }
     .qty-inp:focus { border-color: var(--primary); outline: none; background: #fff5f5; }
@@ -189,7 +195,7 @@ foreach ($products as $p) {
       <h1><?php echo $SHOP_NAME; ?></h1>
       <small>Sivakasi Direct Quick Price List</small>
     </a>
-    <span class="disc-badge">FLAT <?php echo $DISC_PCT; ?>% DISCOUNT</span>
+    <span class="disc-badge">DISCOUNT <?php echo $DISC_PCT; ?>%</span>
   </header>
 
   <nav class="nav-bar">
@@ -204,8 +210,8 @@ foreach ($products as $p) {
   <div class="sticky-summary">
     <div class="sum-pills">
       <div class="sum-box"><span>Items</span><strong id="top-items">0</strong></div>
-      <div class="sum-box"><span>Net Total (MRP)</span><strong>₹<span id="top-mrp">0</span></strong></div>
-      <div class="sum-box"><span>You Save</span><strong class="save-txt">₹<span id="top-save">0</span></strong></div>
+      <div class="sum-box"><span>MRP Total</span><strong>₹<span id="top-mrp">0</span></strong></div>
+      <div class="sum-box"><span>Discount <?php echo $DISC_PCT; ?>%</span><strong class="save-txt">₹<span id="top-save">0</span></strong></div>
       <div class="sum-box"><span>Overall Total</span><strong class="tot-txt">₹<span id="top-net">0</span></strong></div>
     </div>
     <button class="btn-order" onclick="openCheckout()">Confirm Estimate →</button>
@@ -225,7 +231,7 @@ foreach ($products as $p) {
       <div class="cat-section" id="cat-<?php echo $c_idx++; ?>">
         <div class="cat-banner">
           <span><?php echo htmlspecialchars($cat); ?></span>
-          <span class="disc-badge"><?php echo $DISC_PCT; ?>% Discount</span>
+          <span class="disc-badge">Discount <?php echo $DISC_PCT; ?>%</span>
         </div>
         <table class="qtable">
           <thead>
@@ -233,8 +239,9 @@ foreach ($products as $p) {
               <th style="width:45px;">Icon</th>
               <th style="width:55px;">Code</th>
               <th style="text-align:left;">Product Name</th>
-              <th style="width:80px;">Actual Price</th>
-              <th style="width:80px;">Offer Price</th>
+              <th style="width:80px;">MRP</th>
+              <th style="width:95px;">Discount (<?php echo $DISC_PCT; ?>%)</th>
+              <th style="width:80px;">Rate</th>
               <th style="width:70px;">Quantity</th>
               <th style="width:85px;">Total</th>
             </tr>
@@ -246,11 +253,13 @@ foreach ($products as $p) {
                 <td class="center"><strong>#<?php echo $p['id']; ?></strong></td>
                 <td><strong><?php echo htmlspecialchars($p['name']); ?></strong></td>
                 <td class="right"><span class="mrp">₹<?php echo $p['mrp']; ?></span></td>
+                <td class="right"><span class="disc-amt">₹<?php echo $p['disc_amt']; ?></span></td>
                 <td class="right"><span class="price">₹<?php echo $p['price']; ?></span></td>
                 <td class="center">
                   <input type="number" min="0" value="0" class="qty-inp"
                          data-id="<?php echo $p['id']; ?>"
                          data-mrp="<?php echo $p['mrp']; ?>"
+                         data-disc="<?php echo $p['disc_amt']; ?>"
                          data-price="<?php echo $p['price']; ?>"
                          oninput="calcTotal()">
                 </td>
@@ -346,7 +355,7 @@ foreach ($products as $p) {
     const items = <?php echo json_encode($products); ?>;
     const CFG = <?php echo json_encode($cfg); ?>;
     const savedOrder = <?php echo json_encode($submitted_order); ?>;
-    let cart = {}, subTotal = 0, mrpTotal = 0, generatedOTP = "";
+    let cart = {}, subTotal = 0, mrpTotal = 0, discTotal = 0, generatedOTP = "";
 
     function filterTable() {
       const q = document.getElementById('srchBox').value.toLowerCase().trim();
@@ -362,11 +371,12 @@ foreach ($products as $p) {
     }
 
     function calcTotal() {
-      cart = {}; subTotal = 0; mrpTotal = 0; let count = 0;
+      cart = {}; subTotal = 0; mrpTotal = 0; discTotal = 0; let count = 0;
       document.querySelectorAll('.qty-inp').forEach(inp => {
         const id = inp.dataset.id;
         const price = parseInt(inp.dataset.price);
         const mrp = parseInt(inp.dataset.mrp);
+        const disc = parseInt(inp.dataset.disc);
         const qty = Math.max(0, parseInt(inp.value) || 0);
         const sub = price * qty;
         document.getElementById('sub-' + id).innerText = '₹' + sub;
@@ -374,13 +384,13 @@ foreach ($products as $p) {
           cart[id] = qty;
           subTotal += sub;
           mrpTotal += (mrp * qty);
+          discTotal += (disc * qty);
           count += qty;
         }
       });
-      const savings = Math.max(0, mrpTotal - subTotal);
       document.getElementById('top-items').innerText = count;
       document.getElementById('top-mrp').innerText = mrpTotal;
-      document.getElementById('top-save').innerText = savings;
+      document.getElementById('top-save').innerText = discTotal;
       document.getElementById('top-net').innerText = subTotal;
       document.getElementById('foot-net').innerText = subTotal;
     }
@@ -431,56 +441,132 @@ foreach ($products as $p) {
     }
 
     function buildEstimateHTML(meta) {
-      let rows = "", subTot = 0;
+      let rows = "", subTot = 0, totalQty = 0, discMin = null, discMax = null;
       meta.items.forEach((it, i) => {
-        const disc = DISC_PCT > 0 ? DISC_PCT : (it.mrp > 0 ? Math.round(((it.mrp - it.price) / it.mrp) * 100) : 0);
+        const pct = it.mrp > 0 ? Math.round(((it.mrp - it.price) / it.mrp) * 100) : DISC_PCT;
+        if (discMin === null || pct < discMin) discMin = pct;
+        if (discMax === null || pct > discMax) discMax = pct;
+        const discAmt = it.disc_amt !== undefined ? parseFloat(it.disc_amt) : Math.round(it.mrp * (pct / 100));
         subTot += it.sub;
-        rows += `<tr><td style="text-align:center;">${i + 1}</td><td style="text-align:center;">${it.id}</td><td>${it.name}</td><td style="text-align:center;">${it.qty}</td><td style="text-align:right;">${it.mrp.toFixed(2)}</td><td style="text-align:center;">${disc}%</td><td style="text-align:right;">${it.price.toFixed(2)}</td><td style="text-align:right;">${it.sub.toFixed(2)}</td></tr>`;
+        totalQty += it.qty;
+        rows += `<tr>
+          <td style="text-align:center;">${i + 1}</td>
+          <td style="text-align:center;">${it.id}</td>
+          <td>${it.name}</td>
+          <td style="text-align:center;">${it.qty}</td>
+          <td style="text-align:right;">${parseFloat(it.mrp).toFixed(2)}</td>
+          <td style="text-align:right;">${discAmt.toFixed(2)}</td>
+          <td style="text-align:right;">${parseFloat(it.price).toFixed(2)}</td>
+          <td style="text-align:right;">${parseFloat(it.sub).toFixed(2)}</td>
+        </tr>`;
       });
+
+      const discRangeText = (discMin !== null && discMax !== null)
+        ? (discMin === discMax ? `${discMax}%` : `${discMin}% - ${discMax}%`)
+        : `${DISC_PCT}%`;
+
       const pack = parseFloat(meta.packing_chg ?? (subTot * 0.015).toFixed(2));
       const grand = parseInt(meta.total ?? Math.round(subTot + pack));
       const rnd = +(grand - (subTot + pack)).toFixed(2);
 
       return `<!DOCTYPE html><html><head><title>Estimate ${meta.code}</title>
       <style>
-        body { font-family: Arial, sans-serif; padding: 14px; color: #000; font-size: 12px; }
-        .wrap { border: 1.5px solid #000; }
-        .row-flex { display: flex; justify-content: space-between; padding: 6px 8px; border-bottom: 1px solid #000; }
-        .shop-box { text-align: center; padding: 8px; border-bottom: 1px solid #000; }
-        .shop-box h2 { margin: 0 0 3px; font-size: 16px; }
+        @page { size: A4 portrait; margin: 8mm; }
+        * { box-sizing: border-box; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+        html, body { margin: 0; padding: 0; font-family: Arial, sans-serif; color: #000; font-size: 11px; }
+        .page-wrap { border: 1.5px solid #000; width: 100%; min-height: 277mm; display: flex; flex-direction: column; justify-content: space-between; }
+        .top-sec { width: 100%; }
+        .row-flex { display: flex; justify-content: space-between; padding: 5px 8px; border-bottom: 1px solid #000; }
+        .shop-box { text-align: center; padding: 6px 8px; border-bottom: 1px solid #000; line-height: 1.35; }
+        .shop-box h2 { margin: 0 0 2px; font-size: 15px; letter-spacing: 0.5px; }
+        .shop-contact { margin-top: 3px; font-weight: bold; font-size: 10.5px; }
         .cust-bank { display: flex; border-bottom: 1px solid #000; }
-        .cust-col { width: 52%; padding: 8px; border-right: 1px solid #000; line-height: 1.5; }
-        .bank-col { width: 48%; padding: 8px; line-height: 1.5; }
-        .bank-table td { padding: 1px 4px; border: none; font-size: 11.5px; }
+        .cust-col { width: 52%; padding: 6px 8px; border-right: 1px solid #000; line-height: 1.4; }
+        .bank-col { width: 48%; padding: 6px 8px; line-height: 1.35; }
+        .bank-table td { padding: 1px 4px; border: none; font-size: 10.5px; }
         table.items { width: 100%; border-collapse: collapse; }
-        table.items th, table.items td { border: 1px solid #000; padding: 5px 6px; font-size: 11.5px; }
+        table.items th, table.items td { border: 1px solid #000; padding: 4px 5px; font-size: 10.5px; }
         table.items th { background: #f2f2f2; }
-        .tot-row td { font-weight: bold; }
+        table.items tbody tr:first-child td { border-top: none; }
+        .bot-sec { width: 100%; margin-top: auto; }
+        table.summary { width: 100%; border-collapse: collapse; }
+        table.summary td { border: 1px solid #000; padding: 5px 7px; font-size: 11px; font-weight: bold; }
+        table.summary tr:first-child td { border-top: 1.5px solid #000; }
+        .left-merged { vertical-align: top; border-right: 1px solid #000; line-height: 1.6; }
+        .lbl-cell { text-align: right; white-space: nowrap; width: 30%; }
+        .val-cell { text-align: right; white-space: nowrap; width: 16%; }
+        .overall-row td { background-color: #dcdcdc !important; font-size: 12px; }
       </style></head><body>
-      <div class="wrap">
-        <div class="row-flex"><span><b>Enquiry No :</b> ${meta.code}</span><strong style="font-size:14px;">ESTIMATE</strong><span><b>Date :</b> ${meta.date}</span></div>
-        <div class="row-flex"><span><b>Mobile : <?php echo $PHONE_DISPLAY ?? '+91 79047 85247'; ?></b></span><span><b>E-mail : ${CFG.email}</b></span></div>
-        <div class="shop-box"><h2><?php echo $SHOP_NAME; ?></h2><div>${CFG.address}</div></div>
-        <div class="cust-bank">
-          <div class="cust-col"><strong>Customer Details</strong><br>${meta.name}<br>${meta.phone}<br>${meta.city}</div>
-          <div class="bank-col"><table class="bank-table">
-            <tr><td><b>A/C Name</b></td><td>: ${CFG.ac_name}</td></tr>
-            <tr><td><b>A/C Number</b></td><td>: ${CFG.ac_no}</td></tr>
-            <tr><td><b>A/C Type</b></td><td>: ${CFG.ac_type}</td></tr>
-            <tr><td><b>Bank Name</b></td><td>: ${CFG.bank_name}</td></tr>
-            <tr><td><b>IFSC Code</b></td><td>: ${CFG.ifsc}</td></tr>
-            <tr><td><b>UPI ID</b></td><td>: ${CFG.upi}</td></tr>
-          </table></div>
+      <div class="page-wrap">
+        <div class="top-sec">
+          <div class="row-flex">
+            <span><b>Enquiry No :</b> ${meta.code}</span>
+            <strong style="font-size:13px;">ESTIMATE</strong>
+            <span><b>Date :</b> ${meta.date}</span>
+          </div>
+          <div class="shop-box">
+            <h2><?php echo $SHOP_NAME; ?></h2>
+            <div>${CFG.address}</div>
+            <div class="shop-contact">Mobile : <?php echo $PHONE_DISPLAY ?? '+91 79047 85247'; ?> &nbsp;|&nbsp; E-mail : ${CFG.email}</div>
+          </div>
+          <div class="cust-bank">
+            <div class="cust-col">
+              <strong>Customer Details</strong><br>
+              ${meta.name}<br>
+              ${meta.phone}<br>
+              ${meta.city}
+            </div>
+            <div class="bank-col">
+              <table class="bank-table">
+                <tr><td><b>A/C Name</b></td><td>: ${CFG.ac_name}</td></tr>
+                <tr><td><b>A/C Number</b></td><td>: ${CFG.ac_no}</td></tr>
+                <tr><td><b>A/C Type</b></td><td>: ${CFG.ac_type}</td></tr>
+                <tr><td><b>Bank Name</b></td><td>: ${CFG.bank_name}</td></tr>
+                <tr><td><b>IFSC Code</b></td><td>: ${CFG.ifsc}</td></tr>
+                <tr><td><b>UPI ID</b></td><td>: ${CFG.upi}</td></tr>
+              </table>
+            </div>
+          </div>
+          <table class="items">
+            <thead>
+              <tr>
+                <th style="width:36px;">S.No</th>
+                <th style="width:42px;">Code</th>
+                <th style="text-align:left;">Product Name</th>
+                <th style="width:40px;">Qty</th>
+                <th style="width:62px;">MRP</th>
+                <th style="width:76px;">Disc (${discRangeText})</th>
+                <th style="width:62px;">Rate</th>
+                <th style="width:74px;">Amount</th>
+              </tr>
+            </thead>
+            <tbody>${rows}</tbody>
+          </table>
         </div>
-        <table class="items">
-          <thead><tr><th>S.No</th><th>Code</th><th>Product Name</th><th>Qty</th><th>MRP</th><th>Disc %</th><th>Rate</th><th>Amount</th></tr></thead>
-          <tbody>${rows}
-            <tr class="tot-row"><td colspan="6">Total Items : ${meta.items.length}</td><td style="text-align:right;">Sub Total</td><td style="text-align:right;">${subTot.toFixed(2)}</td></tr>
-            <tr class="tot-row"><td colspan="6"></td><td style="text-align:right;">Packing (1.5%)</td><td style="text-align:right;">${pack.toFixed(2)}</td></tr>
-            <tr class="tot-row"><td colspan="6"></td><td style="text-align:right;">Round Off</td><td style="text-align:right;">${rnd.toFixed(2)}</td></tr>
-            <tr class="tot-row"><td colspan="6"></td><td style="text-align:right;">Overall Total</td><td style="text-align:right;">${grand.toFixed(2)}</td></tr>
-          </tbody>
-        </table>
+        <div class="bot-sec">
+          <table class="summary">
+            <tr>
+              <td rowspan="4" class="left-merged">
+                Total Items : ${meta.items.length}<br>
+                Total Qty : ${totalQty}
+              </td>
+              <td class="lbl-cell">Sub Total</td>
+              <td class="val-cell">${subTot.toFixed(2)}</td>
+            </tr>
+            <tr>
+              <td class="lbl-cell">Packing Charges (1.5%)</td>
+              <td class="val-cell">${pack.toFixed(2)}</td>
+            </tr>
+            <tr>
+              <td class="lbl-cell">Round Off</td>
+              <td class="val-cell">${rnd.toFixed(2)}</td>
+            </tr>
+            <tr class="overall-row">
+              <td class="lbl-cell">Overall Amount</td>
+              <td class="val-cell">₹ ${grand.toFixed(2)}</td>
+            </tr>
+          </table>
+        </div>
       </div>
       <script>window.onload = function() { window.print(); };<\/script></body></html>`;
     }
@@ -491,7 +577,7 @@ foreach ($products as $p) {
       const list = [];
       Object.keys(cart).forEach(id => {
         const p = items.find(x => x.id == id);
-        list.push({ id: p.id, name: p.name, mrp: p.mrp, price: p.price, qty: cart[id], sub: p.price * cart[id] });
+        list.push({ id: p.id, name: p.name, mrp: p.mrp, disc_amt: p.disc_amt, price: p.price, qty: cart[id], sub: p.price * cart[id] });
       });
       if (!list.length) return alert("Add items first!");
       const d = new Date(), dd = String(d.getDate()).padStart(2,'0')+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+d.getFullYear();
