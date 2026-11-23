@@ -21,13 +21,11 @@ if ($res && $res->num_rows === 0) {
 if ($res) {
     while ($row = $res->fetch_assoc()) {
         $pid = (int)$row['id'];
-        // Hide out-of-stock / disabled products
         if (in_array($pid, $disabled_ids, true)) {
             continue;
         }
         $row['id'] = $pid;
         $row['mrp'] = (int)$row['mrp'];
-        // Calculate discounted selling rate directly from MRP & Store Front Discount %
         $row['price'] = $DISC_PCT > 0 ? (int)round($row['mrp'] - ($row['mrp'] * $DISC_PCT / 100)) : (int)$row['price'];
         $products[] = $row;
     }
@@ -51,47 +49,60 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['order_data'])) {
     $msg = "*{$SHOP_NAME} Combo Estimate ({$order_code})*\n*Name:* {$name}\n*Phone:* {$phone}\n*City:* {$city}\n\n";
     $items_summary = "";
     $pdf_items = [];
-    $total = 0;
+    $sub_total = 0;
     $i = 1;
 
     foreach ($products as $p) {
         $id = (string)$p['id'];
-        if (!empty($cart[$id]) && $cart[$id] > 0) {
+        if (!empty($cart[$id]) && (int)$cart[$id] > 0) {
             $q = (int)$cart[$id];
             $sub = $p['price'] * $q;
-            $total += $sub;
+            $sub_total += $sub;
             $line = "{$i}. {$p['name']} x {$q} = ₹{$sub}\n";
             $msg .= $line;
             $items_summary .= $line;
             $pdf_items[] = [
-                'id' => $p['id'],
-                'name' => $p['name'],
-                'mrp' => $p['mrp'],
+                'id'    => $p['id'],
+                'name'  => $p['name'],
+                'mrp'   => $p['mrp'],
                 'price' => $p['price'],
-                'qty' => $q,
-                'sub' => $sub
+                'qty'   => $q,
+                'sub'   => $sub
             ];
             $i++;
         }
     }
-    $msg .= "\n*Net Total: ₹{$total}*\nTrack Order ID: *{$order_code}*";
+
+    $packing_chg = round($sub_total * 0.015, 2);
+    $raw_total   = $sub_total + $packing_chg;
+    $final_total = (int)round($raw_total);
+    $round_off   = round($final_total - $raw_total, 2);
+
+    $items_summary .= "Packing Charges (1.5%): +₹" . number_format($packing_chg, 2) . "\n";
+    if ($round_off != 0) {
+        $items_summary .= "Round Off: " . ($round_off >= 0 ? "+" : "") . number_format($round_off, 2) . "\n";
+    }
+    $msg .= "\n*Sub Total: ₹{$sub_total}*\n*Packing (1.5%): ₹{$packing_chg}*\n*Overall Total: ₹{$final_total}*\nTrack Order ID: *{$order_code}*";
 
     $stmt = $conn->prepare("INSERT INTO orders (order_code, cust_name, cust_phone, cust_city, items_text, total_amount, status, tracking_info) VALUES (?, ?, ?, ?, ?, ?, 'Pending Confirmation', 'Awaiting phone confirmation')");
     if ($stmt) {
-        $stmt->bind_param("sssssi", $order_code, $name, $phone, $city, $items_summary, $total);
+        $stmt->bind_param("sssssi", $order_code, $name, $phone, $city, $items_summary, $final_total);
         $stmt->execute();
     }
 
-    file_put_contents("enquiries.txt", "[" . date("Y-m-d H:i:s") . "] {$order_code} - {$name} ({$phone}, {$city}) ₹{$total}\n{$msg}\n---\n", FILE_APPEND);
+    file_put_contents("enquiries.txt", "[" . date("Y-m-d H:i:s") . "] {$order_code} - {$name} ({$phone}, {$city}) ₹{$final_total}\n{$msg}\n---\n", FILE_APPEND);
 
     $submitted_order = [
-        'code' => $order_code,
-        'date' => date("d-m-Y"),
-        'name' => $name,
-        'phone' => $phone,
-        'city' => $city,
-        'items' => $pdf_items,
-        'total' => $total
+        'code'        => $order_code,
+        'date'        => date("d-m-Y"),
+        'name'        => $name,
+        'phone'       => $phone,
+        'city'        => $city,
+        'items'       => $pdf_items,
+        'sub_total'   => $sub_total,
+        'packing_chg' => $packing_chg,
+        'round_off'   => $round_off,
+        'total'       => $final_total
     ];
 }
 ?>
@@ -121,6 +132,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['order_data'])) {
     .icon { height: 80px; background: #fff3f3; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 38px; margin-bottom: 8px; }
     .net { font-size: 18px; font-weight: bold; color: var(--primary); }
     .mrp { font-size: 13px; text-decoration: line-through; color: #888; margin-left: 6px; }
+    .disc-amt { font-size: 11.5px; color: #2b8a3e; font-weight: bold; margin-top: 2px; }
     .qty { display: flex; justify-content: space-between; align-items: center; border: 1px solid var(--border); border-radius: 6px; margin-top: 10px; }
     .qty button { background: #f1f3f5; border: none; width: 36px; height: 34px; font-size: 18px; font-weight: bold; cursor: pointer; }
     .overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.5); display: none; z-index: 200; }
@@ -130,6 +142,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['order_data'])) {
     .d-body { flex: 1; overflow-y: auto; padding: 14px; }
     .c-item { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid var(--border); font-size: 13px; }
     .d-foot { padding: 14px; border-top: 1px solid var(--border); background: #f8f9fa; }
+    .break-box { background: #fff; border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; margin-bottom: 8px; font-size: 12.5px; }
+    .break-row { display: flex; justify-content: space-between; margin-bottom: 3px; }
+    .break-row.grand { border-top: 1px dashed #bbb; padding-top: 4px; margin-top: 4px; font-weight: bold; font-size: 15px; color: var(--primary); }
     .warn { background: #ffe3e3; color: #c92a2a; padding: 8px; border-radius: 5px; font-size: 12px; margin-bottom: 8px; font-weight: bold; }
     .inp { width: 100%; padding: 8px; margin-bottom: 8px; border: 1px solid var(--border); border-radius: 5px; }
     .sub-btn { width: 100%; background: var(--primary); color: #fff; border: none; padding: 11px; border-radius: 6px; font-size: 15px; font-weight: bold; cursor: pointer; margin-bottom: 6px; }
@@ -140,7 +155,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['order_data'])) {
 <body>
 
   <div class="top-bar">
-    <span>📞 Phone: <strong>+91 79047 85247</strong></span>
+    <span>📞 Phone: <strong><?php echo $PHONE_DISPLAY ?? '+91 79047 85247'; ?></strong></span>
     <span>🚚 Min Order: <strong>₹<?php echo number_format($MIN_ORDER); ?>/-</strong></span>
   </div>
 
@@ -163,7 +178,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['order_data'])) {
   <main class="container">
     <h2 style="margin-bottom:14px;color:#2b0509;">🎁 Diwali Gift Boxes & Combos (Flat <?php echo $DISC_PCT; ?>% OFF)</h2>
     <div class="grid">
-      <?php foreach ($products as $p): $off = $DISC_PCT > 0 ? $DISC_PCT : ($p['mrp'] > 0 ? round((($p['mrp'] - $p['price']) / $p['mrp']) * 100) : 0); ?>
+      <?php foreach ($products as $p):
+        $off = $DISC_PCT > 0 ? $DISC_PCT : ($p['mrp'] > 0 ? round((($p['mrp'] - $p['price']) / $p['mrp']) * 100) : 0);
+        $disc_val = max(0, $p['mrp'] - $p['price']);
+      ?>
       <div class="card">
         <span class="tag"><?php echo $off; ?>% OFF</span>
         <div>
@@ -173,6 +191,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['order_data'])) {
         </div>
         <div>
           <div><span class="net">₹<?php echo $p['price']; ?></span><span class="mrp">₹<?php echo $p['mrp']; ?></span></div>
+          <div class="disc-amt">You Save: ₹<?php echo $disc_val; ?> (<?php echo $off; ?>%)</div>
           <div class="qty">
             <button type="button" onclick="qty(<?php echo $p['id']; ?>, -1)">−</button>
             <span id="q-<?php echo $p['id']; ?>">0</span>
@@ -192,8 +211,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['order_data'])) {
     </div>
     <div class="d-body" id="citems"></div>
     <form method="POST" class="d-foot">
-      <div style="display:flex;justify-content:space-between;font-weight:bold;font-size:17px;margin-bottom:8px;">
-        <span>Total:</span><span style="color:var(--primary);">₹<span id="dtot">0</span></span>
+      <div class="break-box">
+        <div class="break-row"><span>Sub Total:</span><strong>₹<span id="dsub">0.00</span></strong></div>
+        <div class="break-row"><span>Packing Charges (1.5%):</span><strong>₹<span id="dpack">0.00</span></strong></div>
+        <div class="break-row"><span>Round Off:</span><strong>₹<span id="drnd">0.00</span></strong></div>
+        <div class="break-row grand"><span>Overall Amount:</span><span>₹<span id="dtot">0</span></span></div>
       </div>
       <div id="warn" class="warn">⚠️ Min order ₹<?php echo $MIN_ORDER; ?>. Add ₹<span id="rem"><?php echo $MIN_ORDER; ?></span> more.</div>
       <input type="hidden" name="order_data" id="order_data" />
@@ -211,7 +233,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['order_data'])) {
       <div style="font-size:46px;margin-bottom:8px;">✅</div>
       <h2 style="color:#2b9348;font-size:20px;margin-bottom:8px;">Your order submitted. We will contact you soon.</h2>
       <p style="font-size:14px;color:#333;margin-bottom:6px;">Order Tracking ID: <strong style="color:#d90429;font-size:16px;"><?php echo $submitted_order['code']; ?></strong></p>
-      <p style="font-size:13px;color:#666;margin-bottom:18px;">Total Amount: <strong>₹<?php echo number_format($submitted_order['total']); ?></strong></p>
+      <p style="font-size:13px;color:#666;margin-bottom:18px;">Overall Amount: <strong>₹<?php echo number_format($submitted_order['total']); ?></strong></p>
       <button type="button" onclick="printSubmittedPDF()" style="width:100%;background:#1d1e22;color:#fff;border:none;padding:12px;border-radius:6px;font-size:15px;font-weight:bold;cursor:pointer;margin-bottom:8px;">📄 Save PDF</button>
       <button type="button" onclick="document.getElementById('successModal').style.display='none'" style="width:100%;background:#eee;color:#333;border:none;padding:10px;border-radius:6px;font-size:14px;font-weight:bold;cursor:pointer;">Close</button>
     </div>
@@ -242,9 +264,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['order_data'])) {
         box.innerHTML += `<div class="c-item"><div><strong>${p.name}</strong><br><small>₹${p.price} × ${cart[id]}</small></div><b>₹${sub}</b></div>`;
       });
       if (!c) box.innerHTML = `<p style="text-align:center;color:#777;margin-top:30px;">Estimate list is empty.</p>`;
+
+      const pack = +(t * 0.015).toFixed(2);
+      const raw = t + pack;
+      const grand = Math.round(raw);
+      const rnd = +(grand - raw).toFixed(2);
+
       document.getElementById("cnt").innerText = c;
-      document.getElementById("htot").innerText = t;
-      document.getElementById("dtot").innerText = t;
+      document.getElementById("htot").innerText = grand;
+      document.getElementById("dsub").innerText = t.toFixed(2);
+      document.getElementById("dpack").innerText = pack.toFixed(2);
+      document.getElementById("drnd").innerText = (rnd >= 0 ? "+" : "") + rnd.toFixed(2);
+      document.getElementById("dtot").innerText = grand;
       document.getElementById("warn").style.display = t >= MIN ? "none" : "block";
       document.getElementById("rem").innerText = MIN - t;
       document.getElementById("sbtn").disabled = t < MIN;
@@ -257,52 +288,142 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['order_data'])) {
     }
 
     function buildEstimateHTML(meta) {
-      let rows = "", tot = 0;
+      let rows = "", subTot = 0, totalQty = 0;
+      let pcts = [];
       meta.items.forEach((it, i) => {
-        const disc = DISC_PCT > 0 ? DISC_PCT : (it.mrp > 0 ? Math.round(((it.mrp - it.price) / it.mrp) * 100) : 0);
-        tot += it.sub;
-        rows += `<tr><td style="text-align:center;">${i + 1}</td><td style="text-align:center;">${it.id}</td><td>${it.name}</td><td style="text-align:center;">${it.qty}</td><td style="text-align:right;">${it.mrp.toFixed(2)}</td><td style="text-align:center;">${disc}%</td><td style="text-align:right;">${it.price.toFixed(2)}</td><td style="text-align:right;">${it.sub.toFixed(2)}</td></tr>`;
+        const pct = DISC_PCT > 0 ? DISC_PCT : (it.mrp > 0 ? Math.round(((it.mrp - it.price) / it.mrp) * 100) : 0);
+        pcts.push(pct);
+        const unitDisc = Math.max(0, it.mrp - it.price);
+        subTot += it.sub;
+        totalQty += parseInt(it.qty);
+        rows += `<tr>
+          <td style="text-align:center;">${i + 1}</td>
+          <td style="text-align:center;">${it.id}</td>
+          <td>${it.name}</td>
+          <td style="text-align:center;">${it.qty}</td>
+          <td style="text-align:right;">${it.mrp.toFixed(2)}</td>
+          <td style="text-align:right;">${unitDisc.toFixed(2)}</td>
+          <td style="text-align:right;">${it.price.toFixed(2)}</td>
+          <td style="text-align:right;">${it.sub.toFixed(2)}</td>
+        </tr>`;
       });
-      return `<!DOCTYPE html><html><head><title>Estimate ${meta.code}</title>
-      <style>
-        body { font-family: Arial, sans-serif; padding: 14px; color: #000; font-size: 12px; }
-        .wrap { border: 1.5px solid #000; }
-        .row-flex { display: flex; justify-content: space-between; padding: 6px 8px; border-bottom: 1px solid #000; }
-        .shop-box { text-align: center; padding: 8px; border-bottom: 1px solid #000; }
-        .shop-box h2 { margin: 0 0 3px; font-size: 16px; }
-        .cust-bank { display: flex; border-bottom: 1px solid #000; }
-        .cust-col { width: 52%; padding: 8px; border-right: 1px solid #000; line-height: 1.5; }
-        .bank-col { width: 48%; padding: 8px; line-height: 1.5; }
-        .bank-table td { padding: 1px 4px; border: none; font-size: 11.5px; }
-        table.items { width: 100%; border-collapse: collapse; }
-        table.items th, table.items td { border: 1px solid #000; padding: 5px 6px; font-size: 11.5px; }
-        table.items th { background: #f2f2f2; }
-        .tot-row td { font-weight: bold; }
-      </style></head><body>
-      <div class="wrap">
-        <div class="row-flex"><span><b>Enquiry No :</b> ${meta.code}</span><strong style="font-size:14px;">ESTIMATE</strong><span><b>Date :</b> ${meta.date}</span></div>
-        <div class="row-flex"><span><b>Mobile : +91 79047 85247</b></span><span><b>E-mail : ${CFG.email}</b></span></div>
-        <div class="shop-box"><h2><?php echo $SHOP_NAME; ?></h2><div>${CFG.address}</div></div>
-        <div class="cust-bank">
-          <div class="cust-col"><strong>Customer Details</strong><br>${meta.name}<br>${meta.phone}<br>${meta.city}</div>
-          <div class="bank-col"><table class="bank-table">
-            <tr><td><b>A/C Name</b></td><td>: ${CFG.ac_name}</td></tr>
-            <tr><td><b>A/C Number</b></td><td>: ${CFG.ac_no}</td></tr>
-            <tr><td><b>A/C Type</b></td><td>: ${CFG.ac_type}</td></tr>
-            <tr><td><b>Bank Name</b></td><td>: ${CFG.bank_name}</td></tr>
-            <tr><td><b>IFSC Code</b></td><td>: ${CFG.ifsc}</td></tr>
-            <tr><td><b>UPI ID</b></td><td>: ${CFG.upi}</td></tr>
-          </table></div>
+
+      const minPct = pcts.length ? Math.min(...pcts) : DISC_PCT;
+      const maxPct = pcts.length ? Math.max(...pcts) : DISC_PCT;
+      const discRange = (minPct === maxPct) ? `${maxPct}%` : `${minPct}% - ${maxPct}%`;
+
+      const pack = parseFloat(meta.packing_chg ?? (subTot * 0.015).toFixed(2));
+      const grand = parseInt(meta.total ?? Math.round(subTot + pack));
+      const rnd = +(grand - (subTot + pack)).toFixed(2);
+
+      return `<!DOCTYPE html>
+      <html>
+      <head>
+        <title><?php echo $SHOP_NAME; ?> - Estimate ${meta.code}</title>
+        <style>
+          @page { size: A4 portrait; margin: 8mm; }
+          * { box-sizing: border-box; }
+          body { font-family: Arial, sans-serif; margin: 0; padding: 0; color: #000; font-size: 11.5px; }
+          .wrap { border: 1.5px solid #000; width: 100%; min-height: 277mm; display: flex; flex-direction: column; justify-content: space-between; }
+          .row-flex { display: flex; justify-content: space-between; padding: 6px 10px; border-bottom: 1px solid #000; }
+          .shop-box { text-align: center; padding: 8px 10px; border-bottom: 1px solid #000; line-height: 1.45; }
+          .shop-box h2 { margin: 0 0 3px; font-size: 16px; text-transform: uppercase; }
+          .shop-contact { margin-top: 4px; font-weight: bold; font-size: 11px; }
+          .cust-bank { display: flex; border-bottom: 1px solid #000; }
+          .cust-col { width: 52%; padding: 8px 10px; border-right: 1px solid #000; line-height: 1.5; }
+          .bank-col { width: 48%; padding: 8px 10px; line-height: 1.4; }
+          .bank-table td { padding: 1px 4px; border: none; font-size: 11px; }
+          table.items { width: 100%; border-collapse: collapse; }
+          table.items th, table.items td { border: 1px solid #000; padding: 5px 6px; font-size: 11px; }
+          table.items th { background: #f2f2f2; }
+          .bottom-area { margin-top: auto; }
+          table.summary { width: 100%; border-collapse: collapse; }
+          table.summary td { border-top: 1px solid #000; border-left: 1px solid #000; padding: 6px 8px; font-size: 11.5px; font-weight: bold; }
+          table.summary td:first-child { border-left: none; }
+          .lbl-col { width: 32%; text-align: right; white-space: nowrap; }
+          .val-col { width: 16%; text-align: right; white-space: nowrap; }
+          .overall-row td { background: #dcdcdc !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; font-size: 12.5px; }
+        </style>
+      </head>
+      <body>
+        <div class="wrap">
+          <div>
+            <div class="row-flex">
+              <span><b>Enquiry No :</b> ${meta.code}</span>
+              <strong style="font-size:14px;">ESTIMATE</strong>
+              <span><b>Date :</b> ${meta.date}</span>
+            </div>
+            <div class="shop-box">
+              <h2><?php echo $SHOP_NAME; ?></h2>
+              <div>${CFG.address}</div>
+              <div class="shop-contact">Mobile : <?php echo $PHONE_DISPLAY ?? '+91 79047 85247'; ?> &nbsp;|&nbsp; E-mail : ${CFG.email}</div>
+            </div>
+            <div class="cust-bank">
+              <div class="cust-col">
+                <strong>Customer Details</strong><br>
+                ${meta.name}<br>
+                ${meta.phone}<br>
+                ${meta.city}
+              </div>
+              <div class="bank-col">
+                <table class="bank-table">
+                  <tr><td><b>A/C Name</b></td><td>: ${CFG.ac_name}</td></tr>
+                  <tr><td><b>A/C Number</b></td><td>: ${CFG.ac_no}</td></tr>
+                  <tr><td><b>A/C Type</b></td><td>: ${CFG.ac_type}</td></tr>
+                  <tr><td><b>Bank Name</b></td><td>: ${CFG.bank_name}</td></tr>
+                  <tr><td><b>IFSC Code</b></td><td>: ${CFG.ifsc}</td></tr>
+                  <tr><td><b>UPI ID</b></td><td>: ${CFG.upi}</td></tr>
+                </table>
+              </div>
+            </div>
+            <table class="items">
+              <thead>
+                <tr>
+                  <th style="width:38px;">S.No</th>
+                  <th style="width:45px;">Code</th>
+                  <th>Product Name</th>
+                  <th style="width:42px;">Qty</th>
+                  <th style="width:65px;">MRP</th>
+                  <th style="width:82px;">Disc (${discRange})</th>
+                  <th style="width:65px;">Rate</th>
+                  <th style="width:78px;">Amount</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${rows}
+              </tbody>
+            </table>
+          </div>
+
+          <div class="bottom-area">
+            <table class="summary">
+              <tr>
+                <td rowspan="4" style="width:52%;vertical-align:top;line-height:1.6;">
+                  Total Items : ${meta.items.length}<br>
+                  Total Qty : ${totalQty}<br>
+                  Discount Applied : ${discRange}
+                </td>
+                <td class="lbl-col">Sub Total</td>
+                <td class="val-col">${subTot.toFixed(2)}</td>
+              </tr>
+              <tr>
+                <td class="lbl-col">Packing Charges (1.5%)</td>
+                <td class="val-col">${pack.toFixed(2)}</td>
+              </tr>
+              <tr>
+                <td class="lbl-col">Round Off</td>
+                <td class="val-col">${(rnd >= 0 ? '+' : '') + rnd.toFixed(2)}</td>
+              </tr>
+              <tr class="overall-row">
+                <td class="lbl-col">Overall Amount</td>
+                <td class="val-col">₹ ${grand.toFixed(2)}</td>
+              </tr>
+            </table>
+          </div>
         </div>
-        <table class="items">
-          <thead><tr><th>S.No</th><th>Code</th><th>Product Name</th><th>Qty</th><th>MRP</th><th>Disc %</th><th>Rate</th><th>Amount</th></tr></thead>
-          <tbody>${rows}
-            <tr class="tot-row"><td colspan="6">Total Items : ${meta.items.length}</td><td style="text-align:right;">Net Total</td><td style="text-align:right;">${tot.toFixed(2)}</td></tr>
-            <tr class="tot-row"><td colspan="6"></td><td style="text-align:right;">Overall Total</td><td style="text-align:right;">${tot.toFixed(2)}</td></tr>
-          </tbody>
-        </table>
-      </div>
-      <script>window.onload = function() { window.print(); };<\/script></body></html>`;
+        <script>window.onload = function() { window.print(); };<\/script>
+      </body>
+      </html>`;
     }
 
     function openPrintWindow(html) { const w = window.open("", "_blank"); w.document.write(html); w.document.close(); }
@@ -315,7 +436,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['order_data'])) {
       });
       if (!list.length) return alert("Add items first!");
       const d = new Date(), dd = String(d.getDate()).padStart(2,'0')+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+d.getFullYear();
-      openPrintWindow(buildEstimateHTML({ code: "DRAFT", date: dd, name: document.getElementById("cname").value || "Customer", phone: document.getElementById("cphone").value || "-", city: document.getElementById("ccity").value || "-", items: list }));
+      openPrintWindow(buildEstimateHTML({
+        code: "DRAFT",
+        date: dd,
+        name: document.getElementById("cname").value || "Customer",
+        phone: document.getElementById("cphone").value || "-",
+        city: document.getElementById("ccity").value || "-",
+        items: list
+      }));
     }
 
     function printSubmittedPDF() { if (savedOrder) openPrintWindow(buildEstimateHTML(savedOrder)); }
