@@ -75,13 +75,18 @@ if (!empty($_SESSION['vk_admin'])) {
         }
 
         if ($show_extra_disc && $extra_disc > 0) {
-            $items_summary .= "Extra Discount: -₹{$extra_disc}\n";
+            $items_summary .= "Extra Discount: -₹" . number_format($extra_disc, 2, '.', '') . "\n";
         }
         if ($show_packing_chg && $packing_chg > 0) {
-            $items_summary .= "Packing Charges: +₹{$packing_chg}\n";
+            $items_summary .= "Packing Charges: +₹" . number_format($packing_chg, 2, '.', '') . "\n";
         }
 
-        $final_total = max(0, $sub_total - ($show_extra_disc ? $extra_disc : 0) + ($show_packing_chg ? $packing_chg : 0));
+        $raw_total = max(0, $sub_total - ($show_extra_disc ? $extra_disc : 0) + ($show_packing_chg ? $packing_chg : 0));
+        $final_total = (int)round($raw_total);
+        $round_off = round($final_total - $raw_total, 2);
+        if ($round_off != 0) {
+            $items_summary .= "Round Off: " . ($round_off >= 0 ? "+" : "") . number_format($round_off, 2, '.', '') . "\n";
+        }
 
         if (!empty($pdf_items)) {
             $stmt = $conn->prepare("INSERT INTO orders (order_code, cust_name, cust_phone, cust_city, items_text, total_amount, status, tracking_info) VALUES (?, ?, ?, ?, ?, ?, 'Walk-in Estimate', 'Direct Store Counter')");
@@ -102,6 +107,7 @@ if (!empty($_SESSION['vk_admin'])) {
                 'show_extra_disc' => $show_extra_disc,
                 'packing_chg' => $packing_chg,
                 'show_packing_chg' => $show_packing_chg,
+                'round_off' => $round_off,
                 'total' => $final_total
             ];
         } else {
@@ -187,6 +193,7 @@ if (!empty($_SESSION['vk_admin'])) {
 
 $all_products = [];
 $prod_map = [];
+$cat_list = [];
 $disc_global = (float)$cfg['discount_pct'];
 $pres = $conn->query("SELECT * FROM products ORDER BY cat, id");
 if ($pres) {
@@ -196,9 +203,62 @@ if ($pres) {
         $pr['calc_rate'] = $disc_global > 0 ? (int)round($pr['mrp'] - ($pr['mrp'] * $disc_global / 100)) : (int)$pr['price'];
         $all_products[] = $pr;
         $prod_map[$pr['name']] = $pr;
+        if (!in_array($pr['cat'], $cat_list, true)) {
+            $cat_list[] = $pr['cat'];
+        }
     }
 }
 $disabled_ids = array_map('intval', $cfg['disabled_ids']);
+
+// Build Year-wise Customer Database directly from orders table
+$available_years = [];
+$yr_res = $conn->query("SELECT DISTINCT YEAR(created_at) AS yr FROM orders WHERE created_at IS NOT NULL ORDER BY yr DESC");
+if ($yr_res) {
+    while ($yr_row = $yr_res->fetch_assoc()) {
+        if (!empty($yr_row['yr'])) $available_years[] = (string)$yr_row['yr'];
+    }
+}
+if (!in_array(date('Y'), $available_years, true)) {
+    array_unshift($available_years, date('Y'));
+}
+$selected_year = isset($_GET['year']) ? trim($_GET['year']) : 'ALL';
+
+$customers_db = [];
+$cust_sql = "SELECT * FROM orders";
+if ($selected_year !== 'ALL' && preg_match('/^\d{4}$/', $selected_year)) {
+    $cust_sql .= " WHERE YEAR(created_at) = " . (int)$selected_year;
+}
+$cust_sql .= " ORDER BY created_at DESC, id DESC";
+$cres = $conn->query($cust_sql);
+if ($cres) {
+    while ($ord = $cres->fetch_assoc()) {
+        $raw_phone = preg_replace('/[^0-9]/', '', $ord['cust_phone']);
+        $norm_phone = strlen($raw_phone) >= 10 ? substr($raw_phone, -10) : $raw_phone;
+        $yr_val = !empty($ord['created_at']) ? date('Y', strtotime($ord['created_at'])) : date('Y');
+        $key = ($norm_phone !== '' ? $norm_phone : strtolower(trim($ord['cust_name']))) . '_' . $yr_val;
+
+        if (!isset($customers_db[$key])) {
+            $customers_db[$key] = [
+                'year' => $yr_val,
+                'name' => $ord['cust_name'],
+                'phone' => $ord['cust_phone'],
+                'city' => $ord['cust_city'],
+                'orders_count' => 0,
+                'total_spent' => 0,
+                'last_order_code' => $ord['order_code'],
+                'last_order_date' => !empty($ord['created_at']) ? date('d-m-Y', strtotime($ord['created_at'])) : '-',
+                'order_codes' => []
+            ];
+        }
+        $customers_db[$key]['orders_count']++;
+        $customers_db[$key]['total_spent'] += (int)$ord['total_amount'];
+        $customers_db[$key]['order_codes'][] = $ord['order_code'];
+        if (empty($customers_db[$key]['city']) || $customers_db[$key]['city'] === '-') {
+            $customers_db[$key]['city'] = $ord['cust_city'];
+        }
+    }
+}
+$customers_list = array_values($customers_db);
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -206,7 +266,7 @@ $disabled_ids = array_map('intval', $cfg['disabled_ids']);
   <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>VK Crackers Admin</title>
   <style>
-    body { font-family: sans-serif; background: #f4f4f4; padding: 12px; max-width: 980px; margin: auto; }
+    body { font-family: sans-serif; background: #f4f4f4; padding: 12px; max-width: 1020px; margin: auto; }
     .box { background: #fff; padding: 16px; border-radius: 8px; margin-bottom: 14px; box-shadow: 0 2px 5px rgba(0,0,0,0.08); }
     .tabs { display: flex; gap: 8px; overflow-x: auto; margin-bottom: 14px; }
     .tab { padding: 10px 14px; background: #fff; border-radius: 6px; text-decoration: none; color: #333; font-weight: bold; font-size: 13px; border: 1px solid #ddd; white-space: nowrap; }
@@ -220,10 +280,15 @@ $disabled_ids = array_map('intval', $cfg['disabled_ids']);
     .row-disabled { background: #fff5f5; opacity: 0.8; }
     .badge-off { background: #ffe3e3; color: #c92a2a; padding: 2px 6px; border-radius: 4px; font-size: 11px; font-weight: bold; }
     .badge-on { background: #d3f9d8; color: #2b8a3e; padding: 2px 6px; border-radius: 4px; font-size: 11px; font-weight: bold; }
+    .badge-yr { background: #e7f5ff; color: #1864ab; padding: 2px 7px; border-radius: 4px; font-size: 11px; font-weight: bold; }
     .btn-sm { padding: 6px 10px; font-size: 12px; text-decoration: none; border-radius: 4px; display: inline-block; font-weight: bold; color: #fff; }
     .chg-card { background: #f8f9fa; border: 1px solid #dee2e6; border-radius: 6px; padding: 10px; }
     .chk-label { display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: bold; color: #333; cursor: pointer; margin-top: 4px; }
     .chk-label input { width: 16px; height: 16px; margin: 0; }
+    .toolbar { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; margin-bottom: 12px; }
+    .stat-row { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }
+    .stat-pill { background: #f8f9fa; border: 1px solid #dee2e6; border-radius: 6px; padding: 8px 12px; font-size: 12px; }
+    .stat-pill strong { display: block; font-size: 16px; color: #d90429; }
     @media (max-width: 650px) { .grid-2, .grid-3 { grid-template-columns: 1fr; } }
   </style>
 </head>
@@ -240,11 +305,12 @@ $disabled_ids = array_map('intval', $cfg['disabled_ids']);
 <?php else: ?>
   <div class="box" style="display:flex;justify-content:space-between;align-items:center;">
     <h3>🎆 VK Crackers Admin</h3>
-    <div style="font-size:13px;"><a href="index.php" target="_blank">Store</a> | <a href="track-order.php" target="_blank">Track</a> | <a href="?logout=1" style="color:red;">Logout</a></div>
+    <div style="font-size:13px;"><a href="index.php" target="_blank">Store</a> | <a href="quick-shop.php" target="_blank">Quick Shop</a> | <a href="track-order.php" target="_blank">Track</a> | <a href="?logout=1" style="color:red;">Logout</a></div>
   </div>
 
   <div class="tabs">
-    <a href="?tab=orders" class="tab <?php echo $tab==='orders'?'active':''; ?>">📦 Orders & Customers</a>
+    <a href="?tab=orders" class="tab <?php echo $tab==='orders'?'active':''; ?>">📦 Orders</a>
+    <a href="?tab=customers" class="tab <?php echo $tab==='customers'?'active':''; ?>">👥 Customer Database</a>
     <a href="?tab=walkin" class="tab <?php echo $tab==='walkin'?'active':''; ?>">🧾 Walk-in Bill</a>
     <a href="?tab=store" class="tab <?php echo $tab==='store'?'active':''; ?>">🏪 Store Front</a>
     <a href="?tab=payment" class="tab <?php echo $tab==='payment'?'active':''; ?>">💳 Payment & Bank</a>
@@ -260,7 +326,7 @@ $disabled_ids = array_map('intval', $cfg['disabled_ids']);
     <h4>📦 Customer Orders & Details</h4>
     <table>
       <tr><th>Order ID</th><th>Customer Details</th><th>Total</th><th>Status, Update & Print</th></tr>
-      <?php $ores = $conn->query("SELECT * FROM orders ORDER BY id DESC LIMIT 50");
+      <?php $ores = $conn->query("SELECT * FROM orders ORDER BY id DESC LIMIT 100");
       if ($ores && $ores->num_rows > 0):
         while ($o = $ores->fetch_assoc()): ?>
         <tr>
@@ -283,7 +349,7 @@ $disabled_ids = array_map('intval', $cfg['disabled_ids']);
                   <option value="<?php echo $st; ?>" <?php if ($o['status'] === $st) echo 'selected'; ?>><?php echo $st; ?></option>
                 <?php endforeach; ?>
               </select><br>
-              <input type="text" name="tracking_info" value="<?php echo htmlspecialchars($o['tracking_info']); ?>" placeholder="Lorry Name & LR No." style="width:170px;"><br>
+              <input type="text" name="tracking_info" value="<?php echo htmlspecialchars($o['tracking_info'] ?? ''); ?>" placeholder="Lorry Name & LR No." style="width:170px;"><br>
               <button type="submit" name="update_order" style="background:#2b9348;">Update</button>
               <button type="button" onclick='printAdminOrder(<?php echo json_encode($o); ?>)' style="background:#1d1e22;">🖨️ Print</button>
             </form>
@@ -293,6 +359,79 @@ $disabled_ids = array_map('intval', $cfg['disabled_ids']);
       else: ?>
         <tr><td colspan="4">No customer orders yet.</td></tr>
       <?php endif; ?>
+    </table>
+  </div>
+  <?php endif; ?>
+
+  <?php if ($tab === 'customers'): ?>
+  <div class="box" style="overflow-x:auto;">
+    <div class="toolbar">
+      <div>
+        <h4 style="margin-bottom:2px;">👥 Year-Wise Customer Database</h4>
+        <small style="color:#555;">Automatically compiled from customer orders (deduplicated by mobile number & year).</small>
+      </div>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+        <form method="GET" style="display:flex;align-items:center;gap:6px;margin:0;">
+          <input type="hidden" name="tab" value="customers">
+          <label style="font-size:12px;font-weight:bold;">Year:</label>
+          <select name="year" onchange="this.form.submit()" style="margin:0;">
+            <option value="ALL" <?php echo $selected_year === 'ALL' ? 'selected' : ''; ?>>All Years</option>
+            <?php foreach ($available_years as $yr_opt): ?>
+              <option value="<?php echo htmlspecialchars($yr_opt); ?>" <?php echo $selected_year === $yr_opt ? 'selected' : ''; ?>><?php echo htmlspecialchars($yr_opt); ?></option>
+            <?php endforeach; ?>
+          </select>
+        </form>
+        <button type="button" onclick="exportCustomersPDF()" style="background:#1d1e22;padding:8px 14px;">📄 Export PDF</button>
+      </div>
+    </div>
+
+    <?php
+      $total_cust_count = count($customers_list);
+      $total_cust_orders = array_sum(array_column($customers_list, 'orders_count'));
+      $total_cust_revenue = array_sum(array_column($customers_list, 'total_spent'));
+    ?>
+    <div class="stat-row">
+      <div class="stat-pill"><span>Unique Customers (<?php echo htmlspecialchars($selected_year); ?>)</span><strong><?php echo $total_cust_count; ?></strong></div>
+      <div class="stat-pill"><span>Total Orders</span><strong><?php echo $total_cust_orders; ?></strong></div>
+      <div class="stat-pill"><span>Total Estimate Value</span><strong>₹<?php echo number_format($total_cust_revenue); ?></strong></div>
+    </div>
+
+    <div style="margin-bottom:10px;">
+      <input type="text" id="cust_search" placeholder="🔍 Filter by customer name, mobile number, city, or order ID..." onkeyup="filterCustomers()" style="width:100%;">
+    </div>
+
+    <table>
+      <thead>
+        <tr>
+          <th style="width:45px;">S.No</th>
+          <th style="width:65px;">Year</th>
+          <th>Customer Name</th>
+          <th>Mobile Number</th>
+          <th>City / Location</th>
+          <th style="text-align:center;">Orders</th>
+          <th style="text-align:right;">Total Value</th>
+          <th>Last Order</th>
+        </tr>
+      </thead>
+      <tbody id="cust_tbody">
+        <?php if (!empty($customers_list)):
+          foreach ($customers_list as $idx => $c):
+            $search_blob = strtolower($c['year'].' '.$c['name'].' '.$c['phone'].' '.$c['city'].' '.implode(' ', $c['order_codes']));
+        ?>
+          <tr class="cust-row" data-search="<?php echo htmlspecialchars($search_blob); ?>">
+            <td><?php echo $idx + 1; ?></td>
+            <td><span class="badge-yr"><?php echo htmlspecialchars($c['year']); ?></span></td>
+            <td><strong><?php echo htmlspecialchars($c['name']); ?></strong></td>
+            <td><a href="tel:<?php echo htmlspecialchars($c['phone']); ?>"><?php echo htmlspecialchars($c['phone']); ?></a></td>
+            <td><?php echo htmlspecialchars($c['city']); ?></td>
+            <td style="text-align:center;"><strong><?php echo $c['orders_count']; ?></strong><br><small style="color:#666;"><?php echo htmlspecialchars(implode(', ', $c['order_codes'])); ?></small></td>
+            <td style="text-align:right;"><strong style="color:#2b8a3e;">₹<?php echo number_format($c['total_spent']); ?></strong></td>
+            <td><small><?php echo htmlspecialchars($c['last_order_date']); ?></small></td>
+          </tr>
+        <?php endforeach; else: ?>
+          <tr><td colspan="8" style="text-align:center;color:#666;padding:18px;">No customer records found for the selected year.</td></tr>
+        <?php endif; ?>
+      </tbody>
     </table>
   </div>
   <?php endif; ?>
@@ -308,7 +447,6 @@ $disabled_ids = array_map('intval', $cfg['disabled_ids']);
         <input type="text" name="w_city" id="w_city" placeholder="City / Place (Optional)">
       </div>
 
-      <!-- Extra Discount & Packing Charges Controls -->
       <div class="grid-2" style="margin-top:8px;">
         <div class="chg-card">
           <label style="font-size:12px;font-weight:bold;color:#2b8a3e;">➖ Extra Counter Discount (₹)</label>
@@ -426,10 +564,12 @@ $disabled_ids = array_map('intval', $cfg['disabled_ids']);
     <h4>+ Add New Cracker (Active Discount: <?php echo $cfg['discount_pct']; ?>%)</h4>
     <form method="POST">
       <input type="text" name="name" placeholder="Product Name" required style="width:100%">
-      <select name="cat">
-        <option>Sparklers</option><option>Chakkar</option><option>Flower Pots</option>
-        <option>Aerial</option><option>Sound</option><option>Gift Box</option>
-      </select>
+      <input type="text" name="cat" list="catOptions" placeholder="Category (e.g. Sparklers, Fountains)" required style="width:190px">
+      <datalist id="catOptions">
+        <?php foreach ($cat_list as $c_opt): ?>
+          <option value="<?php echo htmlspecialchars($c_opt); ?>">
+        <?php endforeach; ?>
+      </datalist>
       <input type="text" name="icon" value="🎆" style="width:50px" placeholder="Icon">
       <input type="number" name="mrp" placeholder="MRP ₹" required style="width:110px">
       <button type="submit" name="add">Add Product</button>
@@ -479,88 +619,182 @@ $disabled_ids = array_map('intval', $cfg['disabled_ids']);
     const CFG = <?php echo json_encode($cfg); ?>;
     const PROD_MAP = <?php echo json_encode($prod_map); ?>;
     const WALKIN_SAVED = <?php echo json_encode($walkin_saved_order); ?>;
+    const CUSTOMERS_DATA = <?php echo json_encode($customers_list); ?>;
+    const SELECTED_YEAR = <?php echo json_encode($selected_year); ?>;
 
     function buildEstimateHTML(meta) {
-      let rows = "", subTot = 0;
-      const discPct = parseFloat(CFG.discount_pct) || 0;
+      let rows = "", subTot = 0, totalQty = 0;
+      const defaultDisc = parseFloat(CFG.discount_pct) || 0;
+      let minDisc = null, maxDisc = null;
+
       meta.items.forEach((it, i) => {
-        const itemDisc = it.mrp > 0 ? Math.round(((it.mrp - it.price) / it.mrp) * 100) : discPct;
-        subTot += it.sub;
+        const mrp = parseFloat(it.mrp) || 0;
+        const rate = parseFloat(it.price) || 0;
+        const qty = parseInt(it.qty) || 0;
+        const sub = parseFloat(it.sub) || 0;
+        const pct = mrp > 0 ? Math.round(((mrp - rate) / mrp) * 100) : defaultDisc;
+        if (minDisc === null || pct < minDisc) minDisc = pct;
+        if (maxDisc === null || pct > maxDisc) maxDisc = pct;
+
+        const discAmt = Math.max(0, (mrp - rate) * qty);
+        subTot += sub;
+        totalQty += qty;
+
         rows += `<tr>
           <td style="text-align:center;">${i + 1}</td>
           <td style="text-align:center;">${it.id}</td>
           <td>${it.name}</td>
-          <td style="text-align:center;">${it.qty}</td>
-          <td style="text-align:right;">${parseFloat(it.mrp).toFixed(2)}</td>
-          <td style="text-align:center;">${itemDisc}%</td>
-          <td style="text-align:right;">${parseFloat(it.price).toFixed(2)}</td>
-          <td style="text-align:right;">${parseFloat(it.sub).toFixed(2)}</td>
+          <td style="text-align:center;">${qty}</td>
+          <td style="text-align:right;">${mrp.toFixed(2)}</td>
+          <td style="text-align:right;">${discAmt.toFixed(2)}</td>
+          <td style="text-align:right;">${rate.toFixed(2)}</td>
+          <td style="text-align:right;">${sub.toFixed(2)}</td>
         </tr>`;
       });
+
+      const discRangeText = (minDisc === null)
+        ? `${defaultDisc}%`
+        : (minDisc === maxDisc ? `${minDisc}%` : `${minDisc}% - ${maxDisc}%`);
 
       const showDisc = meta.show_extra_disc && parseFloat(meta.extra_disc) > 0;
       const showPack = meta.show_packing_chg && parseFloat(meta.packing_chg) > 0;
       const extraDiscVal = showDisc ? parseFloat(meta.extra_disc) : 0;
       const packChgVal = showPack ? parseFloat(meta.packing_chg) : 0;
-      const finalTotal = Math.max(0, subTot - extraDiscVal + packChgVal);
+      const rawTotal = Math.max(0, subTot - extraDiscVal + packChgVal);
+      const grand = meta.total !== undefined ? parseInt(meta.total) : Math.round(rawTotal);
+      const rnd = meta.round_off !== undefined ? parseFloat(meta.round_off) : +(grand - rawTotal).toFixed(2);
 
-      let extraRows = "";
+      let summaryRows = `
+        <tr class="tot-row">
+          <td colspan="5" rowspan="${2 + (showDisc ? 1 : 0) + (showPack ? 1 : 0) + 1}" class="items-summary-cell">
+            <strong>Total Items : ${meta.items.length}</strong> &nbsp;|&nbsp; <strong>Total Qty : ${totalQty}</strong><br>
+            <span style="font-size:10.5px;color:#333;">Discount Range Applied : <b>${discRangeText}</b></span>
+          </td>
+          <td colspan="2" class="lbl-cell">Sub Total</td>
+          <td class="val-cell">${subTot.toFixed(2)}</td>
+        </tr>`;
+
       if (showDisc) {
-        extraRows += `<tr class="tot-row">
-          <td colspan="6"></td>
-          <td style="text-align:right;">Extra Discount</td>
-          <td style="text-align:right;">- ${extraDiscVal.toFixed(2)}</td>
+        summaryRows += `
+        <tr class="tot-row">
+          <td colspan="2" class="lbl-cell">Extra Discount</td>
+          <td class="val-cell">- ${extraDiscVal.toFixed(2)}</td>
         </tr>`;
       }
       if (showPack) {
-        extraRows += `<tr class="tot-row">
-          <td colspan="6"></td>
-          <td style="text-align:right;">Packing Charges</td>
-          <td style="text-align:right;">+ ${packChgVal.toFixed(2)}</td>
+        summaryRows += `
+        <tr class="tot-row">
+          <td colspan="2" class="lbl-cell">Packing Charges</td>
+          <td class="val-cell">+ ${packChgVal.toFixed(2)}</td>
         </tr>`;
       }
+      summaryRows += `
+        <tr class="tot-row">
+          <td colspan="2" class="lbl-cell">Round Off</td>
+          <td class="val-cell">${rnd >= 0 ? '+' : ''}${rnd.toFixed(2)}</td>
+        </tr>
+        <tr class="tot-row overall-highlight">
+          <td colspan="2" class="lbl-cell">Overall Amount</td>
+          <td class="val-cell">${grand.toFixed(2)}</td>
+        </tr>`;
 
-      return `<!DOCTYPE html><html><head><title>Estimate ${meta.code}</title>
-      <style>
-        body { font-family: Arial, sans-serif; padding: 14px; color: #000; font-size: 12px; }
-        .wrap { border: 1.5px solid #000; }
-        .row-flex { display: flex; justify-content: space-between; padding: 6px 8px; border-bottom: 1px solid #000; }
-        .shop-box { text-align: center; padding: 8px; border-bottom: 1px solid #000; }
-        .shop-box h2 { margin: 0 0 3px; font-size: 16px; }
-        .cust-bank { display: flex; border-bottom: 1px solid #000; }
-        .cust-col { width: 52%; padding: 8px; border-right: 1px solid #000; line-height: 1.5; }
-        .bank-col { width: 48%; padding: 8px; line-height: 1.5; }
-        .bank-table td { padding: 1px 4px; border: none; font-size: 11.5px; }
-        table.items { width: 100%; border-collapse: collapse; }
-        table.items th, table.items td { border: 1px solid #000; padding: 5px 6px; font-size: 11.5px; }
-        table.items th { background: #f2f2f2; }
-        .tot-row td { font-weight: bold; }
-      </style></head><body>
-      <div class="wrap">
-        <div class="row-flex"><span><b>Enquiry No :</b> ${meta.code}</span><strong style="font-size:14px;">ESTIMATE</strong><span><b>Date :</b> ${meta.date}</span></div>
-        <div class="row-flex"><span><b>Mobile : +91 79047 85247</b></span><span><b>E-mail : ${CFG.email}</b></span></div>
-        <div class="shop-box"><h2><?php echo $SHOP_NAME; ?></h2><div>${CFG.address}</div></div>
-        <div class="cust-bank">
-          <div class="cust-col"><strong>Customer Details</strong><br>${meta.name}<br>${meta.phone}<br>${meta.city}</div>
-          <div class="bank-col"><table class="bank-table">
-            <tr><td><b>A/C Name</b></td><td>: ${CFG.ac_name}</td></tr>
-            <tr><td><b>A/C Number</b></td><td>: ${CFG.ac_no}</td></tr>
-            <tr><td><b>A/C Type</b></td><td>: ${CFG.ac_type}</td></tr>
-            <tr><td><b>Bank Name</b></td><td>: ${CFG.bank_name}</td></tr>
-            <tr><td><b>IFSC Code</b></td><td>: ${CFG.ifsc}</td></tr>
-            <tr><td><b>UPI ID</b></td><td>: ${CFG.upi}</td></tr>
-          </table></div>
+      return `<!DOCTYPE html>
+      <html>
+      <head>
+        <title><?php echo $SHOP_NAME; ?> - Estimate ${meta.code}</title>
+        <style>
+          @page { size: A4 portrait; margin: 8mm; }
+          * { box-sizing: border-box; -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+          body { font-family: Arial, sans-serif; margin: 0; padding: 0; color: #000; font-size: 11.5px; }
+          .page-wrap { border: 1.5px solid #000; min-height: 277mm; display: flex; flex-direction: column; justify-content: space-between; }
+          .top-section { width: 100%; }
+          .row-flex { display: flex; justify-content: space-between; padding: 5px 8px; border-bottom: 1px solid #000; }
+          .shop-box { text-align: center; padding: 7px 8px; border-bottom: 1px solid #000; line-height: 1.45; }
+          .shop-box h2 { margin: 0 0 2px; font-size: 16px; letter-spacing: 0.5px; }
+          .shop-contact { margin-top: 3px; font-weight: bold; font-size: 11px; }
+          .cust-bank { display: flex; border-bottom: 1px solid #000; }
+          .cust-col { width: 52%; padding: 7px 8px; border-right: 1px solid #000; line-height: 1.45; }
+          .bank-col { width: 48%; padding: 7px 8px; line-height: 1.4; }
+          .bank-table td { padding: 1px 4px; border: none; font-size: 11px; }
+          table.items { width: 100%; border-collapse: collapse; table-layout: fixed; }
+          table.items th, table.items td { border: 1px solid #000; padding: 4px 5px; font-size: 11px; word-wrap: break-word; }
+          table.items thead th { background: #f2f2f2; border-top: none; }
+          table.items th:first-child, table.items td:first-child { border-left: none; }
+          table.items th:last-child, table.items td:last-child { border-right: none; }
+          .bottom-section { width: 100%; margin-top: auto; }
+          table.summary-tbl { width: 100%; border-collapse: collapse; table-layout: fixed; }
+          table.summary-tbl td { border: 1px solid #000; padding: 5px 6px; font-size: 11.5px; }
+          table.summary-tbl td:first-child { border-left: none; }
+          table.summary-tbl td:last-child { border-right: none; }
+          table.summary-tbl tr:last-child td { border-bottom: none; }
+          .tot-row td { font-weight: bold; }
+          .items-summary-cell { vertical-align: middle; text-align: left; background: #fff; line-height: 1.5; }
+          .lbl-cell { text-align: right; white-space: nowrap; width: 30%; }
+          .val-cell { text-align: right; white-space: nowrap; width: 14%; }
+          .overall-highlight td.lbl-cell,
+          .overall-highlight td.val-cell { background-color: #dcdcdc !important; font-size: 12.5px; }
+        </style>
+      </head>
+      <body>
+        <div class="page-wrap">
+          <div class="top-section">
+            <div class="row-flex">
+              <span><b>Enquiry No :</b> ${meta.code}</span>
+              <strong style="font-size:14px;">ESTIMATE</strong>
+              <span><b>Date :</b> ${meta.date}</span>
+            </div>
+            <div class="shop-box">
+              <h2><?php echo $SHOP_NAME; ?></h2>
+              <div>${CFG.address}</div>
+              <div class="shop-contact">Mobile : <?php echo $PHONE_DISPLAY ?? '+91 79047 85247'; ?> &nbsp;|&nbsp; E-mail : ${CFG.email}</div>
+            </div>
+            <div class="cust-bank">
+              <div class="cust-col">
+                <strong>Customer Details</strong><br>
+                ${meta.name}<br>
+                ${meta.phone}<br>
+                ${meta.city}
+              </div>
+              <div class="bank-col">
+                <table class="bank-table">
+                  <tr><td><b>A/C Name</b></td><td>: ${CFG.ac_name}</td></tr>
+                  <tr><td><b>A/C Number</b></td><td>: ${CFG.ac_no}</td></tr>
+                  <tr><td><b>A/C Type</b></td><td>: ${CFG.ac_type}</td></tr>
+                  <tr><td><b>Bank Name</b></td><td>: ${CFG.bank_name}</td></tr>
+                  <tr><td><b>IFSC Code</b></td><td>: ${CFG.ifsc}</td></tr>
+                  <tr><td><b>UPI ID</b></td><td>: ${CFG.upi}</td></tr>
+                </table>
+              </div>
+            </div>
+            <table class="items">
+              <thead>
+                <tr>
+                  <th style="width:6%;">S.No</th>
+                  <th style="width:7%;">Code</th>
+                  <th style="width:33%;">Product Name</th>
+                  <th style="width:7%;">Qty</th>
+                  <th style="width:11%;">MRP</th>
+                  <th style="width:12%;">Disc (${discRangeText})</th>
+                  <th style="width:11%;">Rate</th>
+                  <th style="width:13%;">Amount</th>
+                </tr>
+              </thead>
+              <tbody>${rows}</tbody>
+            </table>
+          </div>
+          <div class="bottom-section">
+            <table class="summary-tbl">
+              <colgroup>
+                <col style="width:6%;"><col style="width:7%;"><col style="width:33%;"><col style="width:7%;"><col style="width:11%;">
+                <col style="width:15%;"><col style="width:8%;"><col style="width:13%;">
+              </colgroup>
+              <tbody>${summaryRows}</tbody>
+            </table>
+          </div>
         </div>
-        <table class="items">
-          <thead><tr><th>S.No</th><th>Code</th><th>Product Name</th><th>Qty</th><th>MRP</th><th>Disc %</th><th>Rate</th><th>Amount</th></tr></thead>
-          <tbody>${rows}
-            <tr class="tot-row"><td colspan="6">Total Items : ${meta.items.length}</td><td style="text-align:right;">Sub Total</td><td style="text-align:right;">${subTot.toFixed(2)}</td></tr>
-            ${extraRows}
-            <tr class="tot-row"><td colspan="6"></td><td style="text-align:right;">Overall Total</td><td style="text-align:right;">${finalTotal.toFixed(2)}</td></tr>
-          </tbody>
-        </table>
-      </div>
-      <script>window.onload = function() { window.print(); };<\/script></body></html>`;
+        <script>window.onload = function() { window.print(); };<\/script>
+      </body>
+      </html>`;
     }
 
     function openPrintWindow(html) { const w = window.open("", "_blank"); w.document.write(html); w.document.close(); }
@@ -568,11 +802,11 @@ $disabled_ids = array_map('intval', $cfg['disabled_ids']);
     function printAdminOrder(ord) {
       const lines = (ord.items_text || "").trim().split("\n");
       let list = [], idx = 1;
-      let extraDisc = 0, showExtraDisc = false, packingChg = 0, showPackingChg = false;
+      let extraDisc = 0, showExtraDisc = false, packingChg = 0, showPackingChg = false, roundOff = undefined;
       const discPct = parseFloat(CFG.discount_pct) || 0;
 
       lines.forEach(line => {
-        const m = line.match(/^\d+\.\s*(.+?)\s*x\s*(\d+)\s*=\s*₹(\d+)/i);
+        const m = line.match(/^\d+\.\s*(.+?)\s*x\s*(\d+)\s*=\s*₹([\d.]+)/i);
         if (m) {
           const name = m[1].trim(), qty = parseInt(m[2]), sub = parseFloat(m[3]);
           const rate = qty > 0 ? (sub / qty) : sub;
@@ -583,8 +817,10 @@ $disabled_ids = array_map('intval', $cfg['disabled_ids']);
         } else {
           const dMatch = line.match(/^Extra Discount:\s*-₹([\d.]+)/i);
           if (dMatch) { extraDisc = parseFloat(dMatch[1]); showExtraDisc = true; }
-          const pMatch = line.match(/^Packing Charges:\s*\+?₹([\d.]+)/i);
+          const pMatch = line.match(/^Packing Charges(?:\s*\([^)]+\))?:\s*\+?₹([\d.]+)/i);
           if (pMatch) { packingChg = parseFloat(pMatch[1]); showPackingChg = true; }
+          const rMatch = line.match(/^Round Off:\s*([+-]?[\d.]+)/i);
+          if (rMatch) { roundOff = parseFloat(rMatch[1]); }
         }
       });
 
@@ -599,8 +835,119 @@ $disabled_ids = array_map('intval', $cfg['disabled_ids']);
         extra_disc: extraDisc,
         show_extra_disc: showExtraDisc,
         packing_chg: packingChg,
-        show_packing_chg: showPackingChg
+        show_packing_chg: showPackingChg,
+        round_off: roundOff,
+        total: ord.total_amount
       }));
+    }
+
+    function filterCustomers() {
+      const inp = document.getElementById("cust_search");
+      if (!inp) return;
+      const q = inp.value.toLowerCase().trim();
+      document.querySelectorAll(".cust-row").forEach(tr => {
+        tr.style.display = tr.dataset.search.includes(q) ? "" : "none";
+      });
+    }
+
+    function exportCustomersPDF() {
+      const searchInp = document.getElementById("cust_search");
+      const q = searchInp ? searchInp.value.toLowerCase().trim() : "";
+      const filtered = CUSTOMERS_DATA.filter(c => {
+        if (!q) return true;
+        const blob = (c.year + ' ' + c.name + ' ' + c.phone + ' ' + c.city + ' ' + c.order_codes.join(' ')).toLowerCase();
+        return blob.includes(q);
+      });
+
+      if (!filtered.length) {
+        alert("No customer records to export!");
+        return;
+      }
+
+      let rows = "", totalOrders = 0, totalSpent = 0;
+      filtered.forEach((c, i) => {
+        totalOrders += parseInt(c.orders_count) || 0;
+        totalSpent += parseFloat(c.total_spent) || 0;
+        rows += `<tr>
+          <td style="text-align:center;">${i + 1}</td>
+          <td style="text-align:center;">${c.year}</td>
+          <td><strong>${c.name}</strong></td>
+          <td style="text-align:center;">${c.phone}</td>
+          <td>${c.city}</td>
+          <td style="text-align:center;">${c.orders_count}</td>
+          <td style="text-align:right;">${parseFloat(c.total_spent).toFixed(2)}</td>
+          <td style="text-align:center;">${c.last_order_date}</td>
+        </tr>`;
+      });
+
+      const today = new Date();
+      const dd = String(today.getDate()).padStart(2, '0') + '-' + String(today.getMonth() + 1).padStart(2, '0') + '-' + today.getFullYear();
+      const yrLabel = SELECTED_YEAR === 'ALL' ? 'All Years' : 'Year ' + SELECTED_YEAR;
+
+      const html = `<!DOCTYPE html>
+      <html>
+      <head>
+        <title><?php echo $SHOP_NAME; ?> - Customer Database (${yrLabel})</title>
+        <style>
+          @page { size: A4 portrait; margin: 8mm; }
+          * { box-sizing: border-box; -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+          body { font-family: Arial, sans-serif; margin: 0; padding: 0; color: #000; font-size: 11px; }
+          .page-wrap { border: 1.5px solid #000; min-height: 277mm; display: flex; flex-direction: column; justify-content: space-between; }
+          .row-flex { display: flex; justify-content: space-between; padding: 5px 8px; border-bottom: 1px solid #000; }
+          .shop-box { text-align: center; padding: 7px 8px; border-bottom: 1px solid #000; line-height: 1.45; }
+          .shop-box h2 { margin: 0 0 2px; font-size: 16px; }
+          .shop-contact { margin-top: 3px; font-weight: bold; font-size: 11px; }
+          table.cust-tbl { width: 100%; border-collapse: collapse; }
+          table.cust-tbl th, table.cust-tbl td { border: 1px solid #000; padding: 5px 6px; font-size: 10.5px; }
+          table.cust-tbl thead th { background: #f2f2f2; border-top: none; }
+          table.cust-tbl th:first-child, table.cust-tbl td:first-child { border-left: none; }
+          table.cust-tbl th:last-child, table.cust-tbl td:last-child { border-right: none; }
+          .bottom-section { margin-top: auto; border-top: 1.5px solid #000; }
+          .summary-bar { display: flex; justify-content: space-between; padding: 8px 10px; background: #dcdcdc !important; font-weight: bold; font-size: 12px; }
+        </style>
+      </head>
+      <body>
+        <div class="page-wrap">
+          <div>
+            <div class="row-flex">
+              <span><b>Report :</b> Customer Database (${yrLabel})</span>
+              <strong style="font-size:13px;">CUSTOMER DIRECTORY</strong>
+              <span><b>Export Date :</b> ${dd}</span>
+            </div>
+            <div class="shop-box">
+              <h2><?php echo $SHOP_NAME; ?></h2>
+              <div>${CFG.address}</div>
+              <div class="shop-contact">Mobile : <?php echo $PHONE_DISPLAY ?? '+91 79047 85247'; ?> &nbsp;|&nbsp; E-mail : ${CFG.email}</div>
+            </div>
+            <table class="cust-tbl">
+              <thead>
+                <tr>
+                  <th style="width:6%;">S.No</th>
+                  <th style="width:7%;">Year</th>
+                  <th style="width:22%;">Customer Name</th>
+                  <th style="width:14%;">Mobile</th>
+                  <th style="width:22%;">City / Location</th>
+                  <th style="width:7%;">Orders</th>
+                  <th style="width:12%;">Total Value (₹)</th>
+                  <th style="width:10%;">Last Order</th>
+                </tr>
+              </thead>
+              <tbody>${rows}</tbody>
+            </table>
+          </div>
+          <div class="bottom-section">
+            <div class="summary-bar">
+              <span>Total Unique Customers : ${filtered.length}</span>
+              <span>Total Orders : ${totalOrders}</span>
+              <span>Overall Estimate Value : ₹${totalSpent.toFixed(2)}</span>
+            </div>
+          </div>
+        </div>
+        <script>window.onload = function() { window.print(); };<\/script>
+      </body>
+      </html>`;
+
+      openPrintWindow(html);
     }
 
     let walkinCart = {};
@@ -627,7 +974,7 @@ $disabled_ids = array_map('intval', $cfg['disabled_ids']);
 
       const appliedDisc = showDisc ? extraDisc : 0;
       const appliedPack = showPack ? packChg : 0;
-      const netTotal = Math.max(0, subTot - appliedDisc + appliedPack);
+      const netTotal = Math.round(Math.max(0, subTot - appliedDisc + appliedPack));
 
       document.getElementById("w-cnt").innerText = cnt;
       document.getElementById("w-subtot").innerText = subTot;
@@ -670,7 +1017,7 @@ $disabled_ids = array_map('intval', $cfg['disabled_ids']);
       openPrintWindow(buildEstimateHTML({
         code: "WALK-IN",
         date: dd,
-        name: document.getElementById("w_name").value || "Walk-in Customer",
+        name: document.getElementById("w_name").value || "Customer",
         phone: document.getElementById("w_phone").value || "-",
         city: document.getElementById("w_city").value || "Sivakasi (Direct)",
         items: list,
