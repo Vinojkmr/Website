@@ -132,7 +132,7 @@ $steps = ['Pending Confirmation', 'Confirmed', 'Packed', 'Dispatched', 'Delivere
         <h3 style="color:#c92a2a;margin-bottom:8px;">No Order Found</h3>
         <p style="font-size:14px;color:#555;">We could not find an enquiry matching <strong><?php echo htmlspecialchars($query_val); ?></strong>. Please check the number or contact us on WhatsApp.</p>
         <a href="https://wa.me<?php echo htmlspecialchars($WHATSAPP_NUM ?? '917904785247'); ?>?text=<?php echo urlencode('Hi VK Crackers, I want to check my order status for: ' . $query_val); ?>" target="_blank" class="wa-help">📲 Ask on WhatsApp</a>
-      </div>
+       </div>
     <?php endif; ?>
     <?php foreach ($results as $ord):
       $current_idx = array_search($ord['status'], $steps, true);
@@ -167,8 +167,7 @@ $steps = ['Pending Confirmation', 'Confirmed', 'Packed', 'Dispatched', 'Delivere
           <strong>Order Summary (Total: ₹<?php echo number_format((float)$ord['total_amount']); ?>):</strong><br>
           <?php echo htmlspecialchars($ord['items_text']); ?>
         </div>
-
-        <a href="https://wa.me<?php echo htmlspecialchars($WHATSAPP_NUM ?? '917904785247'); ?>?text=<?php echo urlencode('Hi VK Crackers, enquiring about Order #' . $ord['order_code']); ?>" target="_blank" class="wa-help">📲 Support on WhatsApp</a>
+      <a href="https://wa.me<?php echo htmlspecialchars($WHATSAPP_NUM ?? '917904785247'); ?>?text=<?php echo urlencode('Hi VK Crackers, enquiring about Order #' . $ord['order_code']); ?>" target="_blank" class="wa-help">📲 Support on WhatsApp</a>
       </div>
     <?php endforeach; ?>
   </div>
