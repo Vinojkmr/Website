@@ -1,0 +1,33 @@
+# ==========================================
+# VK CRACKERS - Security & Performance Rules
+# Compatible with KSWEB (Apache) & cPanel
+# ==========================================
+
+# 1. Disable Directory Browsing
+Options -Indexes
+
+# 2. Protect Sensitive Data, Logs, and Config Files
+<FilesMatch "^(settings\.json|enquiries\.txt|database\.sql|db\.php|\.env|\.git)">
+    <IfModule mod_authz_core.c>
+        Require all denied
+    </IfModule>
+    <IfModule !mod_authz_core.c>
+        Order allow,deny
+        Deny from all
+    </IfModule>
+</FilesMatch>
+
+# 3. Set Default Entry Page
+DirectoryIndex index.php index.html
+
+# 4. Basic Security Headers
+<IfModule mod_headers.c>
+    Header set X-Content-Type-Options "nosniff"
+    Header set X-Frame-Options "SAMEORIGIN"
+    Header set X-XSS-Protection "1; mode=block"
+</IfModule>
+
+# 5. Enable GZIP Compression
+<IfModule mod_deflate.c>
+    AddOutputFilterByType DEFLATE text/html text/plain text/css application/javascript application/json
+</IfModule>
