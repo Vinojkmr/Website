@@ -1,36 +1,45 @@
 <?php
 require 'db.php';
 
-// Ensure orders table exists so tracking works seamlessly
-$conn->query("CREATE TABLE IF NOT EXISTS orders (
-    id INT AUTO_INCREMENT PRIMARY KEY,
-    order_code VARCHAR(20) NOT NULL UNIQUE,
-    cust_name VARCHAR(100) NOT NULL,
-    cust_phone VARCHAR(20) NOT NULL,
-    cust_city VARCHAR(100) NOT NULL,
-    items_summary TEXT NOT NULL,
-    total_amount INT NOT NULL,
-    status VARCHAR(50) DEFAULT 'Pending Confirmation',
-    lr_number VARCHAR(100) DEFAULT '',
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
-
 $results = [];
 $searched = false;
 $query_val = "";
+$search_err = "";
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST' || isset($_GET['q'])) {
     $searched = true;
-    $query_val = trim($_POST['query'] ?? $_GET['q'] ?? '');
+    $query_val = trim((string)($_POST['query'] ?? $_GET['q'] ?? ''));
+
     if ($query_val !== '') {
-        $clean = preg_replace('/[^a-zA-Z0-9]/', '', $query_val);
-        $like_phone = "%" . substr($clean, -10) . "%";
-        $stmt = $conn->prepare("SELECT * FROM orders WHERE order_code = ? OR cust_phone LIKE ? ORDER BY id DESC");
-        $stmt->bind_param("ss", $clean, $like_phone);
-        $stmt->execute();
-        $res = $stmt->get_result();
-        while ($row = $res->fetch_assoc()) {
-            $results[] = $row;
+        $clean = strtoupper(preg_replace('/[^a-zA-Z0-9]/', '', $query_val));
+        $digits = preg_replace('/[^0-9]/', '', $query_val);
+
+        // Require either a valid Order ID (min 4 chars) OR a full 10-digit mobile number
+        if (strlen($digits) === 10) {
+            $like_end = "%" . $digits;
+            $stmt = $conn->prepare("SELECT * FROM orders WHERE cust_phone = ? OR cust_phone LIKE ? ORDER BY id DESC LIMIT 20");
+            if ($stmt) {
+                $stmt->bind_param("ss", $digits, $like_end);
+                $stmt->execute();
+                $res = $stmt->get_result();
+                while ($row = $res->fetch_assoc()) {
+                    $results[] = $row;
+                }
+                $stmt->close();
+            }
+        } elseif (strlen($clean) >= 4) {
+            $stmt = $conn->prepare("SELECT * FROM orders WHERE order_code = ? ORDER BY id DESC LIMIT 5");
+            if ($stmt) {
+                $stmt->bind_param("s", $clean);
+                $stmt->execute();
+                $res = $stmt->get_result();
+                while ($row = $res->fetch_assoc()) {
+                    $results[] = $row;
+                }
+                $stmt->close();
+            }
+        } else {
+            $search_err = "Please enter a valid Order ID (e.g., VK260001) or a full 10-digit Mobile Number.";
         }
     }
 }
@@ -42,12 +51,12 @@ $steps = ['Pending Confirmation', 'Confirmed', 'Packed', 'Dispatched', 'Delivere
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Track Your Order | <?php echo $SHOP_NAME ?? 'VK CRACKERS'; ?></title>
+  <title>Track Your Order | <?php echo htmlspecialchars($SHOP_NAME ?? 'VK CRACKERS'); ?></title>
   <style>
     :root { --primary: #d90429; --accent: #ffb703; --bg: #f8f9fa; --text: #1d1e22; --border: #e0e0e0; }
     * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Segoe UI', sans-serif; }
     body { background: var(--bg); color: var(--text); }
-    .top-bar { background: #1d1e22; color: #fff; font-size: 12px; padding: 8px 4%; display: flex; justify-content: space-between; flex-wrap: wrap; }
+    .top-bar { background: #1d1e22; color: #fff; font-size: 12px; padding: 8px 4%; display: flex; justify-content: space-between; flex-wrap: wrap; gap: 6px; }
     .top-bar strong { color: var(--accent); }
     header { background: linear-gradient(90deg, #780015, #d90429); color: #fff; padding: 12px 4%; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; }
     .logo-wrap { display: flex; align-items: center; gap: 10px; text-decoration: none; color: #fff; }
@@ -77,7 +86,7 @@ $steps = ['Pending Confirmation', 'Confirmed', 'Packed', 'Dispatched', 'Delivere
 <body>
 
   <div class="top-bar">
-    <span>📞 WhatsApp & Support: <strong>+91 79047 85247</strong></span>
+    <span>📞 WhatsApp & Support: <strong><?php echo htmlspecialchars($PHONE_DISPLAY ?? '+91 79047 85247'); ?></strong></span>
     <span>🚚 Sivakasi Direct Dispatch</span>
   </div>
 
@@ -89,7 +98,7 @@ $steps = ['Pending Confirmation', 'Confirmed', 'Packed', 'Dispatched', 'Delivere
         <text x="50" y="75" text-anchor="middle" font-family="sans-serif" font-weight="bold" font-size="10" fill="#fff">CRACKERS</text>
       </svg>
       <div>
-        <h1><?php echo $SHOP_NAME ?? 'VK CRACKERS'; ?></h1>
+        <h1><?php echo htmlspecialchars($SHOP_NAME ?? 'VK CRACKERS'); ?></h1>
         <small>Sivakasi Direct Factory Outlet</small>
       </div>
     </a>
@@ -107,23 +116,26 @@ $steps = ['Pending Confirmation', 'Confirmed', 'Packed', 'Dispatched', 'Delivere
   <div class="container">
     <div class="card">
       <h2>🚚 Track Your Crackers Order</h2>
-      <p style="color:#555;font-size:14px;">Enter your <strong>Order ID</strong> (e.g., <code>VK4821</code>) or your <strong>10-digit Mobile Number</strong> to check packing and lorry transport status.</p>
+      <p style="color:#555;font-size:14px;">Enter your <strong>Order ID</strong> (e.g., <code>VK260001</code>) or your <strong>10-digit Mobile Number</strong> to check packing and lorry transport status.</p>
       <form method="POST" class="form-row">
-        <input type="text" name="query" value="<?php echo htmlspecialchars($query_val); ?>" placeholder="Enter Order ID or Mobile Number..." required>
+        <input type="text" name="query" value="<?php echo htmlspecialchars($query_val); ?>" placeholder="Enter Order ID or 10-Digit Mobile Number..." maxlength="30" required>
         <button type="submit">Track Order</button>
       </form>
     </div>
 
-    <?php if ($searched && empty($results)): ?>
+    <?php if ($search_err !== ''): ?>
+      <div class="card" style="text-align:center;">
+        <p style="color:#c92a2a;font-weight:bold;font-size:14px;">⚠️ <?php echo htmlspecialchars($search_err); ?></p>
+      </div>
+    <?php elseif ($searched && empty($results)): ?>
       <div class="card" style="text-align:center;">
         <h3 style="color:#c92a2a;margin-bottom:8px;">No Order Found</h3>
         <p style="font-size:14px;color:#555;">We could not find an enquiry matching <strong><?php echo htmlspecialchars($query_val); ?></strong>. Please check the number or contact us on WhatsApp.</p>
-        <a href="https://wa.me/<?php echo $WHATSAPP_NUM ?? '917904785247'; ?>?text=<?php echo urlencode('Hi VK Crackers, I want to check my order status for: ' . $query_val); ?>" target="_blank" class="wa-help">📲 Ask on WhatsApp</a>
+        <a href="https://wa.me<?php echo htmlspecialchars($WHATSAPP_NUM ?? '917904785247'); ?>?text=<?php echo urlencode('Hi VK Crackers, I want to check my order status for: ' . $query_val); ?>" target="_blank" class="wa-help">📲 Ask on WhatsApp</a>
       </div>
     <?php endif; ?>
-
-    <?php foreach ($results as $ord): 
-      $current_idx = array_search($ord['status'], $steps);
+    <?php foreach ($results as $ord):
+      $current_idx = array_search($ord['status'], $steps, true);
       if ($current_idx === false) $current_idx = 0;
     ?>
       <div class="card">
@@ -139,30 +151,30 @@ $steps = ['Pending Confirmation', 'Confirmed', 'Packed', 'Dispatched', 'Delivere
           <?php foreach ($steps as $i => $label): $done = ($i <= $current_idx) ? 'done' : ''; ?>
             <div class="step <?php echo $done; ?>">
               <div class="dot"><?php echo ($i <= $current_idx) ? '✓' : ($i + 1); ?></div>
-              <?php echo $label; ?>
+              <?php echo htmlspecialchars($label); ?>
             </div>
           <?php endforeach; ?>
         </div>
 
-        <?php if (!empty($ord['lr_number'])): ?>
+        <?php if (!empty($ord['tracking_info'])): ?>
           <div class="lr-box">
             <strong>🚛 Transport / LR Tracking Details:</strong><br>
-            <?php echo htmlspecialchars($ord['lr_number']); ?>
+            <?php echo htmlspecialchars($ord['tracking_info']); ?>
           </div>
         <?php endif; ?>
 
         <div class="items-box">
-          <strong>Order Summary (Total: ₹<?php echo number_format($ord['total_amount']); ?>):</strong><br>
-          <?php echo htmlspecialchars($ord['items_summary']); ?>
+          <strong>Order Summary (Total: ₹<?php echo number_format((float)$ord['total_amount']); ?>):</strong><br>
+          <?php echo htmlspecialchars($ord['items_text']); ?>
         </div>
 
-        <a href="https://wa.me/<?php echo $WHATSAPP_NUM ?? '917904785247'; ?>?text=<?php echo urlencode('Hi VK Crackers, enquiring about Order #' . $ord['order_code']); ?>" target="_blank" class="wa-help">📲 Support on WhatsApp</a>
+        <a href="https://wa.me<?php echo htmlspecialchars($WHATSAPP_NUM ?? '917904785247'); ?>?text=<?php echo urlencode('Hi VK Crackers, enquiring about Order #' . $ord['order_code']); ?>" target="_blank" class="wa-help">📲 Support on WhatsApp</a>
       </div>
     <?php endforeach; ?>
   </div>
 
   <footer>
-    <strong><?php echo $SHOP_NAME ?? 'VK CRACKERS'; ?></strong> • Sivakasi, Tamil Nadu • WhatsApp: +91 79047 85247
+    <strong><?php echo htmlspecialchars($SHOP_NAME ?? 'VK CRACKERS'); ?></strong> • Sivakasi, Tamil Nadu • WhatsApp: <?php echo htmlspecialchars($PHONE_DISPLAY ?? '+91 79047 85247'); ?>
   </footer>
 
 </body>
