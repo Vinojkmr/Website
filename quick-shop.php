@@ -1,20 +1,35 @@
 <?php
+session_set_cookie_params([
+    'lifetime' => 0,
+    'path' => '/',
+    'httponly' => true,
+    'samesite' => 'Strict'
+]);
+session_start();
 require 'db.php';
+
+if (empty($_SESSION['csrf_token'])) {
+    $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+}
 
 $default_cfg = [
     'ac_name' => 'VK Crackers', 'ac_no' => '000000000000', 'ac_type' => 'Current',
     'bank_name' => 'Indian Overseas Bank', 'ifsc' => 'IOBA0000000', 'upi' => 'vkcrackers@upi',
-    'email' => 'vkcrackers@gmail.com', 'address' => 'Sivakasi Main Road, Sivakasi, Tamil Nadu - 626189',
+    'email' => $EMAIL ?? 'vkcrackers@gmail.com',
+    'address' => $ADDRESS ?? 'Sivakasi Main Road, Sivakasi, Tamil Nadu - 626189',
     'discount_pct' => 90, 'min_order' => (isset($MIN_ORDER) ? (int)$MIN_ORDER : 3000),
     'disabled_ids' => []
 ];
-$cfg = file_exists('settings.json') ? array_merge($default_cfg, json_decode(file_get_contents('settings.json'), true)) : $default_cfg;
+$loaded_cfg = file_exists('settings.json') ? json_decode(file_get_contents('settings.json'), true) : [];
+$cfg = is_array($loaded_cfg) ? array_merge($default_cfg, $loaded_cfg) : $default_cfg;
 $MIN_ORDER = (int)$cfg['min_order'];
 $DISC_PCT = (float)$cfg['discount_pct'];
 if ($DISC_PCT <= 0) {
     $DISC_PCT = 90;
 }
-$disabled_ids = isset($cfg['disabled_ids']) && is_array($cfg['disabled_ids']) ? array_map('intval', $cfg['disabled_ids']) : [];
+$disabled_ids = isset($cfg['disabled_ids']) && is_array($cfg['disabled_ids'])
+    ? array_map('intval', $cfg['disabled_ids'])
+    : [];
 
 $products = [];
 $res = $conn->query("SELECT * FROM products ORDER BY cat, id");
@@ -33,97 +48,120 @@ if ($res) {
 }
 
 $submitted_order = null;
+$order_err = '';
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['order_data'])) {
-    $name    = htmlspecialchars(trim($_POST['cust_name']));
-    $phone   = preg_replace('/[^0-9]/', '', trim($_POST['cust_phone']));
-    $email   = htmlspecialchars(trim($_POST['cust_email'] ?? ''));
-    $state   = htmlspecialchars(trim($_POST['cust_state'] ?? 'Tamil Nadu'));
-    $city    = htmlspecialchars(trim($_POST['cust_city']));
-    $address = htmlspecialchars(trim($_POST['cust_address'] ?? ''));
-    $cart    = json_decode($_POST['order_data'], true);
+    $token_ok = isset($_POST['csrf_token'], $_SESSION['csrf_token'])
+        && hash_equals($_SESSION['csrf_token'], (string)$_POST['csrf_token']);
 
-    $yr = date("y");
-    $prefix = "VK" . $yr;
-    $cnt_res = $conn->query("SELECT COUNT(*) AS total FROM orders WHERE order_code LIKE '{$prefix}%'");
-    $next_num = ($cnt_res && ($r = $cnt_res->fetch_assoc())) ? ((int)$r['total'] + 1) : 1;
-    $order_code = $prefix . str_pad($next_num, 4, '0', STR_PAD_LEFT);
+    if (!$token_ok) {
+        $order_err = "Session expired. Please refresh the page and submit again.";
+    } elseif (isset($_SESSION['last_order_time']) && (time() - $_SESSION['last_order_time']) < 15) {
+        $order_err = "Please wait a few seconds before submitting another estimate.";
+    } else {
+        $name    = trim((string)($_POST['cust_name'] ?? ''));
+        $phone   = preg_replace('/[^0-9]/', '', trim((string)($_POST['cust_phone'] ?? '')));
+        $state   = trim((string)($_POST['cust_state'] ?? 'Tamil Nadu'));
+        $city    = trim((string)($_POST['cust_city'] ?? ''));
+        $address = trim((string)($_POST['cust_address'] ?? ''));
+        $cart    = json_decode((string)$_POST['order_data'], true);
 
-    $full_location = trim("{$city}, {$state}" . ($address ? " - {$address}" : ""));
-    $msg = "*{$SHOP_NAME} Quick Estimate ({$order_code})*\n*Name:* {$name}\n*Phone:* {$phone}\n*Location:* {$full_location}\n\n";
-    $items_summary = "";
-    $pdf_items = [];
-    $sub_total = 0;
-    $mrp_total = 0;
-    $i = 1;
+        $state_mins = [
+            'Tamil Nadu' => $MIN_ORDER,
+            'Pondicherry' => $MIN_ORDER,
+            'Karnataka' => max($MIN_ORDER, 5000),
+            'Kerala' => max($MIN_ORDER, 5000),
+            'Andhra / Telangana' => max($MIN_ORDER, 5000),
+            'Other States' => max($MIN_ORDER, 7500)
+        ];
+        $required_min = $state_mins[$state] ?? max($MIN_ORDER, 7500);
 
-    foreach ($products as $p) {
-        $id = (string)$p['id'];
-        if (!empty($cart[$id]) && (int)$cart[$id] > 0) {
-            $q = (int)$cart[$id];
-            $sub = $p['price'] * $q;
-            $sub_total += $sub;
-            $mrp_total += ($p['mrp'] * $q);
-            $line = "{$i}. {$p['name']} x {$q} = ₹{$sub}\n";
-            $msg .= $line;
-            $items_summary .= $line;
-            $pdf_items[] = [
-                'id'       => $p['id'],
-                'name'     => $p['name'],
-                'mrp'      => $p['mrp'],
-                'disc_amt' => $p['disc_amt'],
-                'price'    => $p['price'],
-                'qty'      => $q,
-                'sub'      => $sub
-            ];
-            $i++;
+        if ($name === '' || strlen($phone) !== 10 || $city === '' || $address === '' || !is_array($cart)) {
+            $order_err = "Please fill in all required fields with a valid 10-digit mobile number.";
+        } else {
+            $items_summary = "";
+            $pdf_items = [];
+            $sub_total = 0;
+            $i = 1;
+
+            foreach ($products as $p) {
+                $id = (string)$p['id'];
+                if (!empty($cart[$id]) && (int)$cart[$id] > 0) {
+                    $q = min(999, (int)$cart[$id]);
+                    $sub = $p['price'] * $q;
+                    $sub_total += $sub;
+                    $items_summary .= "{$i}. {$p['name']} x {$q} = ₹{$sub}\n";
+                    $pdf_items[] = [
+                        'id'       => $p['id'],
+                        'name'     => $p['name'],
+                        'mrp'      => $p['mrp'],
+                        'disc_amt' => $p['disc_amt'],
+                        'price'    => $p['price'],
+                        'qty'      => $q,
+                        'sub'      => $sub
+                    ];
+                    $i++;
+                }
+            }
+
+            if (empty($pdf_items) || $sub_total < $required_min) {
+                $order_err = "Minimum order for {$state} is ₹" . number_format($required_min) . ". Please add more items.";
+            } else {
+                $yr = date("y");
+                $prefix = "VK" . $yr;
+                $max_res = $conn->query("SELECT COALESCE(MAX(id), 0) AS max_id FROM orders");
+                $next_num = ($max_res && ($r = $max_res->fetch_assoc())) ? ((int)$r['max_id'] + 1) : 1;
+                $order_code = $prefix . str_pad((string)$next_num, 4, '0', STR_PAD_LEFT);
+
+                $full_location = trim("{$city}, {$state} - {$address}");
+                $packing_chg = round($sub_total * 0.015, 2);
+                $raw_total   = $sub_total + $packing_chg;
+                $final_total = (int)round($raw_total);
+                $round_off   = round($final_total - $raw_total, 2);
+
+                $items_summary .= "Packing Charges (1.5%): +₹" . number_format($packing_chg, 2, '.', '') . "\n";
+                if ($round_off != 0) {
+                    $items_summary .= "Round Off: " . ($round_off >= 0 ? "+" : "") . number_format($round_off, 2, '.', '') . "\n";
+                }
+
+                $stmt = $conn->prepare("INSERT INTO orders (order_code, cust_name, cust_phone, cust_city, items_text, total_amount, status, tracking_info) VALUES (?, ?, ?, ?, ?, ?, 'Pending Confirmation', 'Awaiting phone confirmation')");
+                if ($stmt) {
+                    $stmt->bind_param("sssssi", $order_code, $name, $phone, $full_location, $items_summary, $final_total);
+                    $stmt->execute();
+                    $stmt->close();
+                }
+
+                $_SESSION['last_order_time'] = time();
+                $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+
+                $submitted_order = [
+                    'code'        => $order_code,
+                    'date'        => date("d-m-Y"),
+                    'name'        => $name,
+                    'phone'       => $phone,
+                    'city'        => $full_location,
+                    'items'       => $pdf_items,
+                    'sub_total'   => $sub_total,
+                    'packing_chg' => $packing_chg,
+                    'round_off'   => $round_off,
+                    'total'       => $final_total
+                ];
+            }
         }
     }
-
-    $packing_chg = round($sub_total * 0.015, 2);
-    $raw_total   = $sub_total + $packing_chg;
-    $final_total = (int)round($raw_total);
-    $round_off   = round($final_total - $raw_total, 2);
-
-    $items_summary .= "Packing Charges (1.5%): +₹" . number_format($packing_chg, 2) . "\n";
-    if ($round_off != 0) {
-        $items_summary .= "Round Off: " . ($round_off >= 0 ? "+" : "") . number_format($round_off, 2) . "\n";
-    }
-    $msg .= "\n*Sub Total: ₹{$sub_total}*\n*Packing (1.5%): ₹{$packing_chg}*\n*Overall Total: ₹{$final_total}*\nTrack Order ID: *{$order_code}*";
-
-    $stmt = $conn->prepare("INSERT INTO orders (order_code, cust_name, cust_phone, cust_city, items_text, total_amount, status, tracking_info) VALUES (?, ?, ?, ?, ?, ?, 'Pending Confirmation', 'Awaiting phone confirmation')");
-    if ($stmt) {
-        $stmt->bind_param("sssssi", $order_code, $name, $phone, $full_location, $items_summary, $final_total);
-        $stmt->execute();
-    }
-
-    file_put_contents("enquiries.txt", "[" . date("Y-m-d H:i:s") . "] {$order_code} - {$name} ({$phone}, {$full_location}) ₹{$final_total}\n{$msg}\n---\n", FILE_APPEND);
-
-    $submitted_order = [
-        'code'        => $order_code,
-        'date'        => date("d-m-Y"),
-        'name'        => $name,
-        'phone'       => $phone,
-        'city'        => $full_location,
-        'items'       => $pdf_items,
-        'sub_total'   => $sub_total,
-        'packing_chg' => $packing_chg,
-        'round_off'   => $round_off,
-        'total'       => $final_total
-    ];
 }
-
 $grouped = [];
 foreach ($products as $p) {
     $grouped[$p['cat']][] = $p;
 }
+$json_flags = JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP;
 ?>
 <!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Quick Price List | <?php echo $SHOP_NAME; ?></title>
+  <title>Quick Price List | <?php echo htmlspecialchars($SHOP_NAME); ?></title>
   <style>
     :root { --primary: #d90429; --dark: #1d1e22; --accent: #ffb703; --bg: #f4f6f9; --border: #dee2e6; }
     * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Segoe UI', Arial, sans-serif; }
@@ -136,8 +174,8 @@ foreach ($products as $p) {
     .nav-bar { background: #2b0509; padding: 10px 4%; display: flex; gap: 16px; overflow-x: auto; }
     .nav-bar a { color: #fff; text-decoration: none; font-size: 13px; font-weight: 600; white-space: nowrap; }
     .nav-bar a:hover, .nav-bar a.active { color: var(--accent); }
+    .err-banner { background: #ffe3e3; color: #c92a2a; padding: 10px 4%; text-align: center; font-weight: bold; font-size: 13px; border-bottom: 1px solid #ffa8a8; }
 
-    /* Sticky Live Summary Bar */
     .sticky-summary { position: sticky; top: 0; z-index: 120; background: #fff; border-bottom: 2px solid var(--primary); box-shadow: 0 3px 10px rgba(0,0,0,0.1); padding: 8px 4%; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; }
     .sum-pills { display: flex; gap: 12px; flex-wrap: wrap; font-size: 13px; }
     .sum-box { background: #f8f9fa; border: 1px solid var(--border); padding: 5px 10px; border-radius: 6px; }
@@ -146,7 +184,6 @@ foreach ($products as $p) {
     .save-txt { color: #2b8a3e; }
     .tot-txt { color: var(--primary); }
 
-    /* Search & Category Jump Bar */
     .filter-bar { max-width: 1100px; margin: 14px auto 6px; padding: 0 3%; }
     .search-inp { width: 100%; padding: 10px 12px; border: 1px solid #ccc; border-radius: 6px; font-size: 14px; margin-bottom: 10px; }
     .cat-pills { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 6px; }
@@ -172,7 +209,6 @@ foreach ($products as $p) {
     .btn-order { background: var(--primary); color: #fff; border: none; padding: 10px 18px; border-radius: 6px; font-weight: bold; font-size: 14px; cursor: pointer; }
     .btn-order:disabled { background: #6c757d; cursor: not-allowed; }
 
-    /* Modal & OTP */
     .modal { position: fixed; inset: 0; background: rgba(0,0,0,0.65); display: none; align-items: center; justify-content: center; z-index: 250; padding: 14px; overflow-y: auto; }
     .modal-box { background: #fff; padding: 20px; border-radius: 10px; width: 100%; max-width: 440px; }
     .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
@@ -186,13 +222,13 @@ foreach ($products as $p) {
 <body>
 
   <div class="top-bar">
-    <span>📞 Enquiry & WhatsApp: <strong><?php echo $PHONE_DISPLAY ?? '+91 79047 85247'; ?></strong></span>
-    <span>🚚 Sivakasi Direct Dispatch • License: <strong><?php echo $LICENSE_NO ?? '2026'; ?></strong></span>
+    <span>📞 Enquiry & WhatsApp: <strong><?php echo htmlspecialchars($PHONE_DISPLAY ?? '+91 79047 85247'); ?></strong></span>
+    <span>🚚 Sivakasi Direct Dispatch • License: <strong><?php echo htmlspecialchars($LICENSE_NO ?? '2026'); ?></strong></span>
   </div>
 
   <header>
     <a href="index.php" class="logo-wrap">
-      <h1><?php echo $SHOP_NAME; ?></h1>
+      <h1><?php echo htmlspecialchars($SHOP_NAME); ?></h1>
       <small>Sivakasi Direct Quick Price List</small>
     </a>
     <span class="disc-badge">DISCOUNT <?php echo $DISC_PCT; ?>%</span>
@@ -206,6 +242,10 @@ foreach ($products as $p) {
     <a href="about.php">About Us</a>
     <a href="contact.php">Contact</a>
   </nav>
+
+  <?php if ($order_err !== ''): ?>
+    <div class="err-banner">⚠️ <?php echo htmlspecialchars($order_err); ?></div>
+  <?php endif; ?>
 
   <div class="sticky-summary">
     <div class="sum-pills">
@@ -225,7 +265,6 @@ foreach ($products as $p) {
       <?php endforeach; ?>
     </div>
   </div>
-
   <div class="container">
     <?php $c_idx = 0; foreach ($grouped as $cat => $items): ?>
       <div class="cat-section" id="cat-<?php echo $c_idx++; ?>">
@@ -249,14 +288,14 @@ foreach ($products as $p) {
           <tbody>
             <?php foreach ($items as $p): ?>
               <tr class="prod-row" data-search="<?php echo strtolower(htmlspecialchars($p['id'].' '.$p['name'].' '.$cat)); ?>">
-                <td class="center" style="font-size:20px;"><?php echo $p['icon']; ?></td>
+                <td class="center" style="font-size:20px;"><?php echo htmlspecialchars($p['icon']); ?></td>
                 <td class="center"><strong>#<?php echo $p['id']; ?></strong></td>
                 <td><strong><?php echo htmlspecialchars($p['name']); ?></strong></td>
                 <td class="right"><span class="mrp">₹<?php echo $p['mrp']; ?></span></td>
                 <td class="right"><span class="disc-amt">₹<?php echo $p['disc_amt']; ?></span></td>
                 <td class="right"><span class="price">₹<?php echo $p['price']; ?></span></td>
                 <td class="center">
-                  <input type="number" min="0" value="0" class="qty-inp"
+                  <input type="number" min="0" max="999" value="0" class="qty-inp"
                          data-id="<?php echo $p['id']; ?>"
                          data-mrp="<?php echo $p['mrp']; ?>"
                          data-disc="<?php echo $p['disc_amt']; ?>"
@@ -292,6 +331,7 @@ foreach ($products as $p) {
       </div>
 
       <form method="POST" id="estForm">
+        <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars($_SESSION['csrf_token']); ?>">
         <input type="hidden" name="order_data" id="orderData">
         <div class="grid-2">
           <select name="cust_state" id="cstate" class="inp" onchange="recalcModal()" required>
@@ -302,14 +342,14 @@ foreach ($products as $p) {
             <option value="Andhra / Telangana" data-min="<?php echo max($MIN_ORDER, 5000); ?>">Andhra / Telangana (Min ₹<?php echo max($MIN_ORDER, 5000); ?>)</option>
             <option value="Other States" data-min="<?php echo max($MIN_ORDER, 7500); ?>">Other States (Min ₹<?php echo max($MIN_ORDER, 7500); ?>)</option>
           </select>
-          <input type="text" name="cust_city" id="ccity" class="inp" placeholder="City / Town *" required>
+          <input type="text" name="cust_city" id="ccity" class="inp" placeholder="City / Town *" maxlength="100" required>
         </div>
         <div class="grid-2">
-          <input type="text" name="cust_name" id="cname" class="inp" placeholder="Full Name *" required>
-          <input type="tel" name="cust_phone" id="cphone" class="inp" placeholder="10-Digit Mobile *" pattern="[0-9]{10}" required>
+          <input type="text" name="cust_name" id="cname" class="inp" placeholder="Full Name *" maxlength="100" required>
+          <input type="tel" name="cust_phone" id="cphone" class="inp" placeholder="10-Digit Mobile *" pattern="[0-9]{10}" maxlength="10" required>
         </div>
-        <input type="email" name="cust_email" id="cemail" class="inp" placeholder="Email (Optional)">
-        <input type="text" name="cust_address" id="caddr" class="inp" placeholder="Full Delivery Address *" required>
+        <input type="email" name="cust_email" id="cemail" class="inp" placeholder="Email (Optional)" maxlength="120">
+        <input type="text" name="cust_address" id="caddr" class="inp" placeholder="Full Delivery Address *" maxlength="200" required>
 
         <div class="bill-break">
           <div class="bill-row"><span>Sub Total:</span><strong>₹<span id="m-sub">0.00</span></strong></div>
@@ -318,21 +358,10 @@ foreach ($products as $p) {
           <div class="bill-row grand"><span>Overall Amount:</span><span>₹<span id="m-grand">0</span></span></div>
         </div>
 
-        <button type="button" id="subBtn" class="btn-order" style="width:100%;margin-bottom:6px;" onclick="triggerOTP()">Verify Mobile & Submit</button>
+        <button type="submit" id="subBtn" class="btn-order" style="width:100%;margin-bottom:6px;">Submit Estimate Order</button>
         <button type="button" onclick="printDraftPDF()" style="width:100%;background:var(--dark);color:#fff;border:none;padding:9px;border-radius:6px;font-weight:bold;cursor:pointer;margin-bottom:6px;">📄 Save / Print PDF Estimate</button>
         <button type="button" onclick="document.getElementById('checkoutModal').style.display='none'" style="width:100%;padding:8px;border:none;background:#eee;border-radius:5px;font-weight:bold;cursor:pointer;">Cancel</button>
       </form>
-    </div>
-  </div>
-
-  <div class="modal" id="otpModal">
-    <div class="modal-box" style="text-align:center;">
-      <h3 style="margin-bottom:6px;">📱 Mobile OTP Verification</h3>
-      <p style="font-size:13px;color:#555;margin-bottom:10px;">Enter the 4-digit verification code for <strong id="otpPhoneDisp"></strong></p>
-      <div id="demoOtpHint" style="background:#e7f5ff;color:#1864ab;padding:6px;border-radius:5px;font-size:12px;margin-bottom:10px;"></div>
-      <input type="text" id="otpInput" class="inp" maxlength="4" placeholder="Enter 4-digit OTP" style="text-align:center;font-size:18px;letter-spacing:6px;font-weight:bold;">
-      <button type="button" class="btn-order" style="width:100%;margin-bottom:6px;" onclick="verifyAndSubmit()">Confirm & Submit Estimate</button>
-      <button type="button" onclick="document.getElementById('otpModal').style.display='none'" style="width:100%;padding:8px;border:none;background:#eee;border-radius:5px;font-weight:bold;">Back</button>
     </div>
   </div>
 
@@ -341,21 +370,26 @@ foreach ($products as $p) {
     <div style="background:#fff;max-width:400px;width:100%;border-radius:12px;padding:24px;text-align:center;box-shadow:0 10px 25px rgba(0,0,0,0.2);">
       <div style="font-size:46px;margin-bottom:8px;">✅</div>
       <h2 style="color:#2b9348;font-size:20px;margin-bottom:8px;">Estimate Submitted! We will contact you soon.</h2>
-      <p style="font-size:14px;color:#333;margin-bottom:6px;">Order Tracking ID: <strong style="color:#d90429;font-size:16px;"><?php echo $submitted_order['code']; ?></strong></p>
+      <p style="font-size:14px;color:#333;margin-bottom:6px;">Order Tracking ID: <strong style="color:#d90429;font-size:16px;"><?php echo htmlspecialchars($submitted_order['code']); ?></strong></p>
       <p style="font-size:13px;color:#666;margin-bottom:18px;">Overall Amount: <strong>₹<?php echo number_format($submitted_order['total']); ?></strong></p>
       <button type="button" onclick="printSubmittedPDF()" style="width:100%;background:#1d1e22;color:#fff;border:none;padding:12px;border-radius:6px;font-size:15px;font-weight:bold;cursor:pointer;margin-bottom:8px;">📄 Save / Print Estimate PDF</button>
       <button type="button" onclick="document.getElementById('successModal').style.display='none'" style="width:100%;background:#eee;color:#333;border:none;padding:10px;border-radius:6px;font-size:14px;font-weight:bold;cursor:pointer;">Close</button>
     </div>
   </div>
   <?php endif; ?>
-
   <script>
     const BASE_MIN = <?php echo $MIN_ORDER; ?>;
     const DISC_PCT = <?php echo $DISC_PCT; ?>;
-    const items = <?php echo json_encode($products); ?>;
-    const CFG = <?php echo json_encode($cfg); ?>;
-    const savedOrder = <?php echo json_encode($submitted_order); ?>;
-    let cart = {}, subTotal = 0, mrpTotal = 0, discTotal = 0, generatedOTP = "";
+    const items = <?php echo json_encode($products, $json_flags); ?>;
+    const CFG = <?php echo json_encode($cfg, $json_flags); ?>;
+    const savedOrder = <?php echo json_encode($submitted_order, $json_flags); ?>;
+    const SHOP_NAME_JS = <?php echo json_encode($SHOP_NAME, $json_flags); ?>;
+    const PHONE_JS = <?php echo json_encode($PHONE_DISPLAY ?? '+91 79047 85247', $json_flags); ?>;
+    let cart = {}, subTotal = 0, mrpTotal = 0, discTotal = 0;
+
+    function esc(str) {
+      return String(str ?? '').replace(/[&<>"']/g, s => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[s]));
+    }
 
     function filterTable() {
       const q = document.getElementById('srchBox').value.toLowerCase().trim();
@@ -377,7 +411,7 @@ foreach ($products as $p) {
         const price = parseInt(inp.dataset.price);
         const mrp = parseInt(inp.dataset.mrp);
         const disc = parseInt(inp.dataset.disc);
-        const qty = Math.max(0, parseInt(inp.value) || 0);
+        const qty = Math.min(999, Math.max(0, parseInt(inp.value) || 0));
         const sub = price * qty;
         document.getElementById('sub-' + id).innerText = '₹' + sub;
         if (qty > 0) {
@@ -422,24 +456,6 @@ foreach ($products as $p) {
       document.getElementById('checkoutModal').style.display = 'flex';
     }
 
-    function triggerOTP() {
-      const form = document.getElementById('estForm');
-      if (!form.reportValidity()) return;
-      const phone = document.getElementById('cphone').value.trim();
-      generatedOTP = String(Math.floor(1000 + Math.random() * 9000));
-      document.getElementById('otpPhoneDisp').innerText = "+91 " + phone;
-      document.getElementById('demoOtpHint').innerText = "Verification Code: " + generatedOTP + " (Connect SMS gateway for live SMS)";
-      document.getElementById('otpInput').value = "";
-      document.getElementById('otpModal').style.display = 'flex';
-    }
-
-    function verifyAndSubmit() {
-      if (document.getElementById('otpInput').value.trim() !== generatedOTP) {
-        return alert("Invalid OTP! Please check and enter the 4-digit code.");
-      }
-      document.getElementById('estForm').submit();
-    }
-
     function buildEstimateHTML(meta) {
       let rows = "", subTot = 0, totalQty = 0, discMin = null, discMax = null;
       meta.items.forEach((it, i) => {
@@ -448,12 +464,12 @@ foreach ($products as $p) {
         if (discMax === null || pct > discMax) discMax = pct;
         const discAmt = it.disc_amt !== undefined ? parseFloat(it.disc_amt) : Math.round(it.mrp * (pct / 100));
         subTot += it.sub;
-        totalQty += it.qty;
+        totalQty += parseInt(it.qty);
         rows += `<tr>
           <td style="text-align:center;">${i + 1}</td>
-          <td style="text-align:center;">${it.id}</td>
-          <td>${it.name}</td>
-          <td style="text-align:center;">${it.qty}</td>
+          <td style="text-align:center;">${esc(it.id)}</td>
+          <td>${esc(it.name)}</td>
+          <td style="text-align:center;">${parseInt(it.qty)}</td>
           <td style="text-align:right;">${parseFloat(it.mrp).toFixed(2)}</td>
           <td style="text-align:right;">${discAmt.toFixed(2)}</td>
           <td style="text-align:right;">${parseFloat(it.price).toFixed(2)}</td>
@@ -469,7 +485,7 @@ foreach ($products as $p) {
       const grand = parseInt(meta.total ?? Math.round(subTot + pack));
       const rnd = +(grand - (subTot + pack)).toFixed(2);
 
-      return `<!DOCTYPE html><html><head><title>Estimate ${meta.code}</title>
+      return `<!DOCTYPE html><html><head><title>Estimate ${esc(meta.code)}</title>
       <style>
         @page { size: A4 portrait; margin: 8mm; }
         * { box-sizing: border-box; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
@@ -500,30 +516,30 @@ foreach ($products as $p) {
       <div class="page-wrap">
         <div class="top-sec">
           <div class="row-flex">
-            <span><b>Enquiry No :</b> ${meta.code}</span>
+            <span><b>Enquiry No :</b> ${esc(meta.code)}</span>
             <strong style="font-size:13px;">ESTIMATE</strong>
-            <span><b>Date :</b> ${meta.date}</span>
+            <span><b>Date :</b> ${esc(meta.date)}</span>
           </div>
           <div class="shop-box">
-            <h2><?php echo $SHOP_NAME; ?></h2>
-            <div>${CFG.address}</div>
-            <div class="shop-contact">Mobile : <?php echo $PHONE_DISPLAY ?? '+91 79047 85247'; ?> &nbsp;|&nbsp; E-mail : ${CFG.email}</div>
+            <h2>${esc(SHOP_NAME_JS)}</h2>
+            <div>${esc(CFG.address)}</div>
+            <div class="shop-contact">Mobile : ${esc(PHONE_JS)} &nbsp;|&nbsp; E-mail : ${esc(CFG.email)}</div>
           </div>
           <div class="cust-bank">
             <div class="cust-col">
               <strong>Customer Details</strong><br>
-              ${meta.name}<br>
-              ${meta.phone}<br>
-              ${meta.city}
+              ${esc(meta.name)}<br>
+              ${esc(meta.phone)}<br>
+              ${esc(meta.city)}
             </div>
             <div class="bank-col">
               <table class="bank-table">
-                <tr><td><b>A/C Name</b></td><td>: ${CFG.ac_name}</td></tr>
-                <tr><td><b>A/C Number</b></td><td>: ${CFG.ac_no}</td></tr>
-                <tr><td><b>A/C Type</b></td><td>: ${CFG.ac_type}</td></tr>
-                <tr><td><b>Bank Name</b></td><td>: ${CFG.bank_name}</td></tr>
-                <tr><td><b>IFSC Code</b></td><td>: ${CFG.ifsc}</td></tr>
-                <tr><td><b>UPI ID</b></td><td>: ${CFG.upi}</td></tr>
+                <tr><td><b>A/C Name</b></td><td>: ${esc(CFG.ac_name)}</td></tr>
+                <tr><td><b>A/C Number</b></td><td>: ${esc(CFG.ac_no)}</td></tr>
+                <tr><td><b>A/C Type</b></td><td>: ${esc(CFG.ac_type)}</td></tr>
+                <tr><td><b>Bank Name</b></td><td>: ${esc(CFG.bank_name)}</td></tr>
+                <tr><td><b>IFSC Code</b></td><td>: ${esc(CFG.ifsc)}</td></tr>
+                <tr><td><b>UPI ID</b></td><td>: ${esc(CFG.upi)}</td></tr>
               </table>
             </div>
           </div>
@@ -535,7 +551,7 @@ foreach ($products as $p) {
                 <th style="text-align:left;">Product Name</th>
                 <th style="width:40px;">Qty</th>
                 <th style="width:62px;">MRP</th>
-                <th style="width:76px;">Disc (${discRangeText})</th>
+                <th style="width:76px;">Disc (${esc(discRangeText)})</th>
                 <th style="width:62px;">Rate</th>
                 <th style="width:74px;">Amount</th>
               </tr>
@@ -571,13 +587,13 @@ foreach ($products as $p) {
       <script>window.onload = function() { window.print(); };<\/script></body></html>`;
     }
 
-    function openPrintWindow(html) { const w = window.open("", "_blank"); w.document.write(html); w.document.close(); }
+    function openPrintWindow(html) { const w = window.open("", "_blank"); if (w) { w.document.write(html); w.document.close(); } }
 
     function printDraftPDF() {
       const list = [];
       Object.keys(cart).forEach(id => {
         const p = items.find(x => x.id == id);
-        list.push({ id: p.id, name: p.name, mrp: p.mrp, disc_amt: p.disc_amt, price: p.price, qty: cart[id], sub: p.price * cart[id] });
+        if (p) list.push({ id: p.id, name: p.name, mrp: p.mrp, disc_amt: p.disc_amt, price: p.price, qty: cart[id], sub: p.price * cart[id] });
       });
       if (!list.length) return alert("Add items first!");
       const d = new Date(), dd = String(d.getDate()).padStart(2,'0')+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+d.getFullYear();
