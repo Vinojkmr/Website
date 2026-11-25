@@ -1,14 +1,27 @@
-<?php
+<<?php
+session_set_cookie_params([
+    'lifetime' => 0,
+    'path' => '/',
+    'httponly' => true,
+    'samesite' => 'Strict'
+]);
+session_start();
 require 'db.php';
+
+if (empty($_SESSION['csrf_token'])) {
+    $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+}
 
 $default_cfg = [
     'ac_name' => 'VK Crackers', 'ac_no' => '000000000000', 'ac_type' => 'Current',
     'bank_name' => 'Indian Overseas Bank', 'ifsc' => 'IOBA0000000', 'upi' => 'vkcrackers@upi',
-    'email' => 'vkcrackers@gmail.com', 'address' => 'Sivakasi Main Road, Sivakasi, Tamil Nadu - 626189',
-    'discount_pct' => 80, 'min_order' => (isset($MIN_ORDER) ? (int)$MIN_ORDER : 3000),
+    'email' => $EMAIL ?? 'vkcrackers@gmail.com',
+    'address' => $ADDRESS ?? 'Sivakasi Main Road, Sivakasi, Tamil Nadu - 626189',
+    'discount_pct' => 90, 'min_order' => (isset($MIN_ORDER) ? (int)$MIN_ORDER : 3000),
     'disabled_ids' => []
 ];
-$cfg = file_exists('settings.json') ? array_merge($default_cfg, json_decode(file_get_contents('settings.json'), true)) : $default_cfg;
+$loaded_cfg = file_exists('settings.json') ? json_decode(file_get_contents('settings.json'), true) : [];
+$cfg = is_array($loaded_cfg) ? array_merge($default_cfg, $loaded_cfg) : $default_cfg;
 $MIN_ORDER = (int)$cfg['min_order'];
 $DISC_PCT = (float)$cfg['discount_pct'];
 $disabled_ids = isset($cfg['disabled_ids']) && is_array($cfg['disabled_ids']) ? array_map('intval', $cfg['disabled_ids']) : [];
@@ -32,90 +45,106 @@ if ($res) {
 }
 
 $submitted_order = null;
+$order_err = '';
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['order_data'])) {
-    $name = htmlspecialchars(trim($_POST['cust_name']));
-    $phone = preg_replace('/[^0-9]/', '', trim($_POST['cust_phone']));
-    $city = htmlspecialchars(trim($_POST['cust_city']));
-    $cart = json_decode($_POST['order_data'], true);
+    $token_ok = isset($_POST['csrf_token'], $_SESSION['csrf_token'])
+        && hash_equals($_SESSION['csrf_token'], (string)$_POST['csrf_token']);
 
-    // Sequential Order ID: VK + 2-digit year + 4-digit count (e.g., VK260001)
-    $yr = date("y");
-    $prefix = "VK" . $yr;
-    $cnt_res = $conn->query("SELECT COUNT(*) AS total FROM orders WHERE order_code LIKE '{$prefix}%'");
-    $next_num = ($cnt_res && ($r = $cnt_res->fetch_assoc())) ? ((int)$r['total'] + 1) : 1;
-    $order_code = $prefix . str_pad($next_num, 4, '0', STR_PAD_LEFT);
+    if (!$token_ok) {
+        $order_err = "Session expired. Please refresh the page and submit again.";
+    } elseif (isset($_SESSION['last_order_time']) && (time() - $_SESSION['last_order_time']) < 15) {
+        $order_err = "Please wait a few seconds before submitting another estimate.";
+    } else {
+        $name  = trim((string)($_POST['cust_name'] ?? ''));
+        $phone = preg_replace('/[^0-9]/', '', trim((string)($_POST['cust_phone'] ?? '')));
+        $city  = trim((string)($_POST['cust_city'] ?? ''));
+        $cart  = json_decode((string)$_POST['order_data'], true);
 
-    $msg = "*{$SHOP_NAME} Combo Estimate ({$order_code})*\n*Name:* {$name}\n*Phone:* {$phone}\n*City:* {$city}\n\n";
-    $items_summary = "";
-    $pdf_items = [];
-    $sub_total = 0;
-    $i = 1;
+        if ($name === '' || strlen($phone) !== 10 || $city === '' || !is_array($cart)) {
+            $order_err = "Please enter a valid name, 10-digit mobile number, and delivery city.";
+        } else {
+            $items_summary = "";
+            $pdf_items = [];
+            $sub_total = 0;
+            $i = 1;
 
-    foreach ($products as $p) {
-        $id = (string)$p['id'];
-        if (!empty($cart[$id]) && (int)$cart[$id] > 0) {
-            $q = (int)$cart[$id];
-            $sub = $p['price'] * $q;
-            $sub_total += $sub;
-            $line = "{$i}. {$p['name']} x {$q} = ₹{$sub}\n";
-            $msg .= $line;
-            $items_summary .= $line;
-            $pdf_items[] = [
-                'id'    => $p['id'],
-                'name'  => $p['name'],
-                'mrp'   => $p['mrp'],
-                'price' => $p['price'],
-                'qty'   => $q,
-                'sub'   => $sub
-            ];
-            $i++;
+            foreach ($products as $p) {
+                $id = (string)$p['id'];
+                if (!empty($cart[$id]) && (int)$cart[$id] > 0) {
+                    $q = min(999, (int)$cart[$id]);
+                    $sub = $p['price'] * $q;
+                    $sub_total += $sub;
+                    $items_summary .= "{$i}. {$p['name']} x {$q} = ₹{$sub}\n";
+                    $pdf_items[] = [
+                        'id'    => $p['id'],
+                        'name'  => $p['name'],
+                        'mrp'   => $p['mrp'],
+                        'price' => $p['price'],
+                        'qty'   => $q,
+                        'sub'   => $sub
+                    ];
+                    $i++;
+                }
+            }
+
+            if (empty($pdf_items) || $sub_total < $MIN_ORDER) {
+                $order_err = "Minimum order amount is ₹" . number_format($MIN_ORDER) . ". Please add more items.";
+            } else {
+                $yr = date("y");
+                $prefix = "VK" . $yr;
+                $max_res = $conn->query("SELECT COALESCE(MAX(id), 0) AS max_id FROM orders");
+                $next_num = ($max_res && ($r = $max_res->fetch_assoc())) ? ((int)$r['max_id'] + 1) : 1;
+                $order_code = $prefix . str_pad((string)$next_num, 4, '0', STR_PAD_LEFT);
+
+                $packing_chg = round($sub_total * 0.015, 2);
+                $raw_total   = $sub_total + $packing_chg;
+                $final_total = (int)round($raw_total);
+                $round_off   = round($final_total - $raw_total, 2);
+
+                $items_summary .= "Packing Charges (1.5%): +₹" . number_format($packing_chg, 2, '.', '') . "\n";
+                if ($round_off != 0) {
+                    $items_summary .= "Round Off: " . ($round_off >= 0 ? "+" : "") . number_format($round_off, 2, '.', '') . "\n";
+                }
+
+                $stmt = $conn->prepare("INSERT INTO orders (order_code, cust_name, cust_phone, cust_city, items_text, total_amount, status, tracking_info) VALUES (?, ?, ?, ?, ?, ?, 'Pending Confirmation', 'Awaiting phone confirmation')");
+                if ($stmt) {
+                    $stmt->bind_param("sssssi", $order_code, $name, $phone, $city, $items_summary, $final_total);
+                    $stmt->execute();
+                    $stmt->close();
+                }
+
+                $_SESSION['last_order_time'] = time();
+                $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+
+                $submitted_order = [
+                    'code'        => $order_code,
+                    'date'        => date("d-m-Y"),
+                    'name'        => $name,
+                    'phone'       => $phone,
+                    'city'        => $city,
+                    'items'       => $pdf_items,
+                    'sub_total'   => $sub_total,
+                    'packing_chg' => $packing_chg,
+                    'round_off'   => $round_off,
+                    'total'       => $final_total
+                ];
+            }
         }
     }
-
-    $packing_chg = round($sub_total * 0.015, 2);
-    $raw_total   = $sub_total + $packing_chg;
-    $final_total = (int)round($raw_total);
-    $round_off   = round($final_total - $raw_total, 2);
-
-    $items_summary .= "Packing Charges (1.5%): +₹" . number_format($packing_chg, 2) . "\n";
-    if ($round_off != 0) {
-        $items_summary .= "Round Off: " . ($round_off >= 0 ? "+" : "") . number_format($round_off, 2) . "\n";
-    }
-    $msg .= "\n*Sub Total: ₹{$sub_total}*\n*Packing (1.5%): ₹{$packing_chg}*\n*Overall Total: ₹{$final_total}*\nTrack Order ID: *{$order_code}*";
-
-    $stmt = $conn->prepare("INSERT INTO orders (order_code, cust_name, cust_phone, cust_city, items_text, total_amount, status, tracking_info) VALUES (?, ?, ?, ?, ?, ?, 'Pending Confirmation', 'Awaiting phone confirmation')");
-    if ($stmt) {
-        $stmt->bind_param("sssssi", $order_code, $name, $phone, $city, $items_summary, $final_total);
-        $stmt->execute();
-    }
-
-    file_put_contents("enquiries.txt", "[" . date("Y-m-d H:i:s") . "] {$order_code} - {$name} ({$phone}, {$city}) ₹{$final_total}\n{$msg}\n---\n", FILE_APPEND);
-
-    $submitted_order = [
-        'code'        => $order_code,
-        'date'        => date("d-m-Y"),
-        'name'        => $name,
-        'phone'       => $phone,
-        'city'        => $city,
-        'items'       => $pdf_items,
-        'sub_total'   => $sub_total,
-        'packing_chg' => $packing_chg,
-        'round_off'   => $round_off,
-        'total'       => $final_total
-    ];
 }
+$json_flags = JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP;
 ?>
 <!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Combo & Gift Boxes | <?php echo $SHOP_NAME; ?></title>
+  <title>Combo & Gift Boxes | <?php echo htmlspecialchars($SHOP_NAME); ?></title>
   <style>
     :root { --primary: #d90429; --accent: #ffb703; --bg: #f8f9fa; --border: #e0e0e0; }
-    * { box-sizing: border-box; margin: 0; padding: 0; font-family: sans-serif; }
-    body { background: var(--bg); padding-bottom: 70px; }
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Segoe UI', Arial, sans-serif; }
+    body { background: var(--bg); padding-bottom: 70px; color: #222; }
     .top-bar { background: #1d1e22; color: #fff; font-size: 12px; padding: 8px 4%; display: flex; justify-content: space-between; flex-wrap: wrap; gap: 6px; }
     .top-bar strong { color: var(--accent); }
     header { background: linear-gradient(90deg, #780015, #d90429); color: #fff; padding: 12px 4%; display: flex; justify-content: space-between; align-items: center; position: sticky; top: 0; z-index: 100; }
@@ -125,6 +154,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['order_data'])) {
     .nav-bar a { color: #fff; text-decoration: none; font-size: 13px; font-weight: bold; white-space: nowrap; }
     .nav-bar a:hover, .nav-bar a.active { color: var(--accent); }
     .cart-btn { background: var(--accent); color: #000; border: none; padding: 9px 14px; border-radius: 6px; font-weight: bold; cursor: pointer; }
+    .err-banner { background: #ffe3e3; color: #c92a2a; padding: 10px 4%; text-align: center; font-weight: bold; font-size: 13px; border-bottom: 1px solid #ffa8a8; }
     .container { max-width: 1100px; margin: 18px auto; padding: 0 4%; }
     .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 14px; }
     .card { background: #fff; border: 1px solid var(--border); border-radius: 10px; padding: 14px; position: relative; display: flex; flex-direction: column; justify-content: space-between; }
@@ -155,13 +185,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['order_data'])) {
 <body>
 
   <div class="top-bar">
-    <span>📞 Phone: <strong><?php echo $PHONE_DISPLAY ?? '+91 79047 85247'; ?></strong></span>
+    <span>📞 Phone: <strong><?php echo htmlspecialchars($PHONE_DISPLAY ?? '+91 79047 85247'); ?></strong></span>
     <span>🚚 Min Order: <strong>₹<?php echo number_format($MIN_ORDER); ?>/-</strong></span>
   </div>
 
   <header>
     <a href="index.php" class="logo-wrap">
-      <div><h1><?php echo $SHOP_NAME; ?></h1><small>Family Gift Boxes & Combos</small></div>
+      <div><h1><?php echo htmlspecialchars($SHOP_NAME); ?></h1><small>Family Gift Boxes & Combos</small></div>
     </a>
     <button class="cart-btn" onclick="toggleCart()">🛒 (<span id="cnt">0</span>) ₹<span id="htot">0</span></button>
   </header>
@@ -175,6 +205,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['order_data'])) {
     <a href="contact.php">Contact</a>
   </nav>
 
+  <?php if ($order_err !== ''): ?>
+    <div class="err-banner">⚠️ <?php echo htmlspecialchars($order_err); ?></div>
+  <?php endif; ?>
+
   <main class="container">
     <h2 style="margin-bottom:14px;color:#2b0509;">🎁 Diwali Gift Boxes & Combos (Flat <?php echo $DISC_PCT; ?>% OFF)</h2>
     <div class="grid">
@@ -185,7 +219,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['order_data'])) {
       <div class="card">
         <span class="tag"><?php echo $off; ?>% OFF</span>
         <div>
-          <div class="icon"><?php echo $p['icon']; ?></div>
+          <div class="icon"><?php echo htmlspecialchars($p['icon']); ?></div>
           <small style="color:#666;font-weight:bold;"><?php echo strtoupper(htmlspecialchars($p['cat'])); ?></small>
           <h3 style="font-size:15px;margin:4px 0 8px;"><?php echo htmlspecialchars($p['name']); ?></h3>
         </div>
@@ -207,10 +241,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['order_data'])) {
   <aside class="drawer" id="drw">
     <div class="d-head">
       <h3>Combo Estimate</h3>
-      <button type="button" onclick="toggleCart()" style="background:none;border:none;color:#fff;font-size:24px;">×</button>
+      <button type="button" onclick="toggleCart()" style="background:none;border:none;color:#fff;font-size:24px;cursor:pointer;">×</button>
     </div>
     <div class="d-body" id="citems"></div>
     <form method="POST" class="d-foot">
+      <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars($_SESSION['csrf_token']); ?>" />
       <div class="break-box">
         <div class="break-row"><span>Sub Total:</span><strong>₹<span id="dsub">0.00</span></strong></div>
         <div class="break-row"><span>Packing Charges (1.5%):</span><strong>₹<span id="dpack">0.00</span></strong></div>
@@ -219,9 +254,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['order_data'])) {
       </div>
       <div id="warn" class="warn">⚠️ Min order ₹<?php echo $MIN_ORDER; ?>. Add ₹<span id="rem"><?php echo $MIN_ORDER; ?></span> more.</div>
       <input type="hidden" name="order_data" id="order_data" />
-      <input type="text" name="cust_name" id="cname" class="inp" placeholder="Your Name *" required />
-      <input type="tel" name="cust_phone" id="cphone" class="inp" placeholder="Mobile Number (for Tracking) *" required />
-      <input type="text" name="cust_city" id="ccity" class="inp" placeholder="Delivery City *" required />
+      <input type="text" name="cust_name" id="cname" class="inp" placeholder="Your Name *" maxlength="100" required />
+      <input type="tel" name="cust_phone" id="cphone" class="inp" placeholder="10-Digit Mobile Number *" pattern="[0-9]{10}" maxlength="10" required />
+      <input type="text" name="cust_city" id="ccity" class="inp" placeholder="Delivery City *" maxlength="100" required />
       <button type="submit" id="sbtn" class="sub-btn" disabled>Submit Order</button>
       <button type="button" class="pdf-btn" onclick="printDraftPDF()">📄 Save / Print PDF Bill</button>
     </form>
@@ -232,25 +267,27 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['order_data'])) {
     <div style="background:#fff;max-width:400px;width:100%;border-radius:12px;padding:24px;text-align:center;box-shadow:0 10px 25px rgba(0,0,0,0.2);">
       <div style="font-size:46px;margin-bottom:8px;">✅</div>
       <h2 style="color:#2b9348;font-size:20px;margin-bottom:8px;">Your order submitted. We will contact you soon.</h2>
-      <p style="font-size:14px;color:#333;margin-bottom:6px;">Order Tracking ID: <strong style="color:#d90429;font-size:16px;"><?php echo $submitted_order['code']; ?></strong></p>
+      <p style="font-size:14px;color:#333;margin-bottom:6px;">Order Tracking ID: <strong style="color:#d90429;font-size:16px;"><?php echo htmlspecialchars($submitted_order['code']); ?></strong></p>
       <p style="font-size:13px;color:#666;margin-bottom:18px;">Overall Amount: <strong>₹<?php echo number_format($submitted_order['total']); ?></strong></p>
       <button type="button" onclick="printSubmittedPDF()" style="width:100%;background:#1d1e22;color:#fff;border:none;padding:12px;border-radius:6px;font-size:15px;font-weight:bold;cursor:pointer;margin-bottom:8px;">📄 Save PDF</button>
-      <button type="button" onclick="document.getElementById('successModal').style.display='none'" style="width:100%;background:#eee;color:#333;border:none;padding:10px;border-radius:6px;font-size:14px;font-weight:bold;cursor:pointer;">Close</button>
-    </div>
-  </div>
-  <?php endif; ?>
-
   <script>
     const MIN = <?php echo $MIN_ORDER; ?>;
     const DISC_PCT = <?php echo $DISC_PCT; ?>;
-    const items = <?php echo json_encode($products); ?>;
-    const CFG = <?php echo json_encode($cfg); ?>;
-    const savedOrder = <?php echo json_encode($submitted_order); ?>;
+    const items = <?php echo json_encode($products, $json_flags); ?>;
+    const CFG = <?php echo json_encode($cfg, $json_flags); ?>;
+    const savedOrder = <?php echo json_encode($submitted_order, $json_flags); ?>;
+    const SHOP_NAME_JS = <?php echo json_encode($SHOP_NAME, $json_flags); ?>;
+    const PHONE_JS = <?php echo json_encode($PHONE_DISPLAY ?? '+91 79047 85247', $json_flags); ?>;
     let cart = {};
+
+    function esc(str) {
+      return String(str ?? '').replace(/[&<>"']/g, s => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[s]));
+    }
 
     function qty(id, d) {
       cart[id] = (cart[id] || 0) + d;
       if (cart[id] <= 0) delete cart[id];
+      if (cart[id] > 999) cart[id] = 999;
       document.getElementById("q-" + id).innerText = cart[id] || 0;
       updateCart();
     }
@@ -259,9 +296,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['order_data'])) {
       let c = 0, t = 0, box = document.getElementById("citems");
       box.innerHTML = "";
       Object.keys(cart).forEach(id => {
-        const p = items.find(x => x.id == id), sub = p.price * cart[id];
+        const p = items.find(x => x.id == id);
+        if (!p) return;
+        const sub = p.price * cart[id];
         c += cart[id]; t += sub;
-        box.innerHTML += `<div class="c-item"><div><strong>${p.name}</strong><br><small>₹${p.price} × ${cart[id]}</small></div><b>₹${sub}</b></div>`;
+        box.innerHTML += `<div class="c-item"><div><strong>${esc(p.name)}</strong><br><small>₹${p.price} × ${cart[id]}</small></div><b>₹${sub}</b></div>`;
       });
       if (!c) box.innerHTML = `<p style="text-align:center;color:#777;margin-top:30px;">Estimate list is empty.</p>`;
 
@@ -277,7 +316,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['order_data'])) {
       document.getElementById("drnd").innerText = (rnd >= 0 ? "+" : "") + rnd.toFixed(2);
       document.getElementById("dtot").innerText = grand;
       document.getElementById("warn").style.display = t >= MIN ? "none" : "block";
-      document.getElementById("rem").innerText = MIN - t;
+      document.getElementById("rem").innerText = Math.max(0, MIN - t);
       document.getElementById("sbtn").disabled = t < MIN;
       document.getElementById("order_data").value = JSON.stringify(cart);
     }
@@ -298,13 +337,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['order_data'])) {
         totalQty += parseInt(it.qty);
         rows += `<tr>
           <td style="text-align:center;">${i + 1}</td>
-          <td style="text-align:center;">${it.id}</td>
-          <td>${it.name}</td>
-          <td style="text-align:center;">${it.qty}</td>
-          <td style="text-align:right;">${it.mrp.toFixed(2)}</td>
+          <td style="text-align:center;">${esc(it.id)}</td>
+          <td>${esc(it.name)}</td>
+          <td style="text-align:center;">${parseInt(it.qty)}</td>
+          <td style="text-align:right;">${parseFloat(it.mrp).toFixed(2)}</td>
           <td style="text-align:right;">${unitDisc.toFixed(2)}</td>
-          <td style="text-align:right;">${it.price.toFixed(2)}</td>
-          <td style="text-align:right;">${it.sub.toFixed(2)}</td>
+          <td style="text-align:right;">${parseFloat(it.price).toFixed(2)}</td>
+          <td style="text-align:right;">${parseFloat(it.sub).toFixed(2)}</td>
         </tr>`;
       });
 
@@ -319,7 +358,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['order_data'])) {
       return `<!DOCTYPE html>
       <html>
       <head>
-        <title><?php echo $SHOP_NAME; ?> - Estimate ${meta.code}</title>
+        <title>${esc(SHOP_NAME_JS)} - Estimate ${esc(meta.code)}</title>
         <style>
           @page { size: A4 portrait; margin: 8mm; }
           * { box-sizing: border-box; }
@@ -349,30 +388,30 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['order_data'])) {
         <div class="wrap">
           <div>
             <div class="row-flex">
-              <span><b>Enquiry No :</b> ${meta.code}</span>
+              <span><b>Enquiry No :</b> ${esc(meta.code)}</span>
               <strong style="font-size:14px;">ESTIMATE</strong>
-              <span><b>Date :</b> ${meta.date}</span>
+              <span><b>Date :</b> ${esc(meta.date)}</span>
             </div>
             <div class="shop-box">
-              <h2><?php echo $SHOP_NAME; ?></h2>
-              <div>${CFG.address}</div>
-              <div class="shop-contact">Mobile : <?php echo $PHONE_DISPLAY ?? '+91 79047 85247'; ?> &nbsp;|&nbsp; E-mail : ${CFG.email}</div>
+              <h2>${esc(SHOP_NAME_JS)}</h2>
+              <div>${esc(CFG.address)}</div>
+              <div class="shop-contact">Mobile : ${esc(PHONE_JS)} &nbsp;|&nbsp; E-mail : ${esc(CFG.email)}</div>
             </div>
             <div class="cust-bank">
               <div class="cust-col">
                 <strong>Customer Details</strong><br>
-                ${meta.name}<br>
-                ${meta.phone}<br>
-                ${meta.city}
+                ${esc(meta.name)}<br>
+                ${esc(meta.phone)}<br>
+                ${esc(meta.city)}
               </div>
               <div class="bank-col">
                 <table class="bank-table">
-                  <tr><td><b>A/C Name</b></td><td>: ${CFG.ac_name}</td></tr>
-                  <tr><td><b>A/C Number</b></td><td>: ${CFG.ac_no}</td></tr>
-                  <tr><td><b>A/C Type</b></td><td>: ${CFG.ac_type}</td></tr>
-                  <tr><td><b>Bank Name</b></td><td>: ${CFG.bank_name}</td></tr>
-                  <tr><td><b>IFSC Code</b></td><td>: ${CFG.ifsc}</td></tr>
-                  <tr><td><b>UPI ID</b></td><td>: ${CFG.upi}</td></tr>
+                  <tr><td><b>A/C Name</b></td><td>: ${esc(CFG.ac_name)}</td></tr>
+                  <tr><td><b>A/C Number</b></td><td>: ${esc(CFG.ac_no)}</td></tr>
+                  <tr><td><b>A/C Type</b></td><td>: ${esc(CFG.ac_type)}</td></tr>
+                  <tr><td><b>Bank Name</b></td><td>: ${esc(CFG.bank_name)}</td></tr>
+                  <tr><td><b>IFSC Code</b></td><td>: ${esc(CFG.ifsc)}</td></tr>
+                  <tr><td><b>UPI ID</b></td><td>: ${esc(CFG.upi)}</td></tr>
                 </table>
               </div>
             </div>
@@ -384,7 +423,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['order_data'])) {
                   <th>Product Name</th>
                   <th style="width:42px;">Qty</th>
                   <th style="width:65px;">MRP</th>
-                  <th style="width:82px;">Disc (${discRange})</th>
+                  <th style="width:82px;">Disc (${esc(discRange)})</th>
                   <th style="width:65px;">Rate</th>
                   <th style="width:78px;">Amount</th>
                 </tr>
@@ -401,7 +440,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['order_data'])) {
                 <td rowspan="4" style="width:52%;vertical-align:top;line-height:1.6;">
                   Total Items : ${meta.items.length}<br>
                   Total Qty : ${totalQty}<br>
-                  Discount Applied : ${discRange}
+                  Discount Applied : ${esc(discRange)}
                 </td>
                 <td class="lbl-col">Sub Total</td>
                 <td class="val-col">${subTot.toFixed(2)}</td>
@@ -426,13 +465,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['order_data'])) {
       </html>`;
     }
 
-    function openPrintWindow(html) { const w = window.open("", "_blank"); w.document.write(html); w.document.close(); }
+    function openPrintWindow(html) { const w = window.open("", "_blank"); if (w) { w.document.write(html); w.document.close(); } }
 
     function printDraftPDF() {
       const list = [];
       Object.keys(cart).forEach(id => {
         const p = items.find(x => x.id == id);
-        list.push({ id: p.id, name: p.name, mrp: p.mrp, price: p.price, qty: cart[id], sub: p.price * cart[id] });
+        if (p) list.push({ id: p.id, name: p.name, mrp: p.mrp, price: p.price, qty: cart[id], sub: p.price * cart[id] });
       });
       if (!list.length) return alert("Add items first!");
       const d = new Date(), dd = String(d.getDate()).padStart(2,'0')+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+d.getFullYear();
