@@ -93,12 +93,38 @@ endif;
 
 // ================= AUTHENTICATED ADMIN AREA =================
 
+$default_banners = [
+    [
+        'pill' => '🎆 Sivakasi Factory Direct • {DISC}% OFF',
+        'title' => 'Flat {DISC}% Diwali Factory Offer',
+        'desc' => 'Select crackers below or use our Quick Price List to generate an instant PDF estimate & Order Tracking ID.',
+        'btn_text' => '⚡ Open Quick Price List →',
+        'btn_link' => 'quick-shop.php'
+    ],
+    [
+        'pill' => '🎁 Ready-to-Celebrate Packs',
+        'title' => 'Family Gift Boxes & Diwali Combos',
+        'desc' => 'Curated 35-item & 50-item cracker assortments packed safely for families, kids, and corporate gifting at {DISC}% factory discount.',
+        'btn_text' => '🎁 Explore Combo Packs →',
+        'btn_link' => 'combo.php'
+    ],
+    [
+        'pill' => '🚚 Min Order ₹{MIN}/- • Fast Dispatch',
+        'title' => 'Instant Estimate & Live Lorry Tracking',
+        'desc' => 'Submit your estimate in 60 seconds, get a phone confirmation within 2 hours, and track your transport LR details anytime.',
+        'btn_text' => '📦 Track Your Order →',
+        'btn_link' => 'track-order.php'
+    ]
+];
+
 $default_cfg = [
     'ac_name' => 'VK Crackers', 'ac_no' => '000000000000', 'ac_type' => 'Current',
     'bank_name' => 'Indian Overseas Bank', 'ifsc' => 'IOBA0000000', 'upi' => 'vkcrackers@upi',
     'email' => 'vkcrackers@gmail.com', 'address' => 'Sivakasi Main Road, Sivakasi, Tamil Nadu - 626189',
     'discount_pct' => 80, 'min_order' => (isset($MIN_ORDER) ? (int)$MIN_ORDER : 3000),
-    'disabled_ids' => []
+    'disabled_ids' => [],
+    'banner_interval' => 4,
+    'banners' => $default_banners
 ];
 
 $loaded_cfg = file_exists('settings.json') ? json_decode(file_get_contents('settings.json'), true) : [];
@@ -215,17 +241,39 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
         }
 
-        // 2. Save Store Front Discount % & Min Order (and sync DB prices)
+        // 2. Save Store Front Discount %, Min Order & Banners
         if (isset($_POST['save_store'])) {
             $tab = 'store';
             $new_disc = max(0, min(99, (float)($_POST['discount_pct'] ?? 0)));
             $cfg['discount_pct'] = $new_disc;
             $cfg['min_order'] = max(0, (int)($_POST['min_order'] ?? 0));
+            $cfg['banner_interval'] = max(2, min(30, (int)($_POST['banner_interval'] ?? 4)));
+
+            $updated_banners = [];
+            $b_pills = $_POST['b_pill'] ?? [];
+            $b_titles = $_POST['b_title'] ?? [];
+            $b_descs = $_POST['b_desc'] ?? [];
+            $b_btns = $_POST['b_btn_text'] ?? [];
+            $b_links = $_POST['b_btn_link'] ?? [];
+
+            for ($bi = 0; $bi < 3; $bi++) {
+                $title = trim((string)($b_titles[$bi] ?? ''));
+                if ($title !== '') {
+                    $updated_banners[] = [
+                        'pill'     => trim((string)($b_pills[$bi] ?? '')),
+                        'title'    => $title,
+                        'desc'     => trim((string)($b_descs[$bi] ?? '')),
+                        'btn_text' => trim((string)($b_btns[$bi] ?? 'Shop Now →')) ?: 'Shop Now →',
+                        'btn_link' => trim((string)($b_links[$bi] ?? 'quick-shop.php')) ?: 'quick-shop.php'
+                    ];
+                }
+            }
+            $cfg['banners'] = !empty($updated_banners) ? $updated_banners : $default_banners;
             save_settings($cfg);
 
             // Sync all product selling prices in DB with the updated discount percentage
             $conn->query("UPDATE products SET price = ROUND(mrp - (mrp * {$new_disc} / 100))");
-            $msg = "✅ Store Front Discount (" . $cfg['discount_pct'] . "%), Product Rates & Min Order Saved!";
+            $msg = "✅ Store Front Settings, Banners & Rates Saved!";
         }
 
         // 3. Save Bank & UPI Details
@@ -657,13 +705,18 @@ $json_flags = JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP;
   </div>
   <?php endif; ?>
 
-  <?php if ($tab === 'store'): ?>
+  <?php if ($tab === 'store'):
+    $admin_banners = (!empty($cfg['banners']) && is_array($cfg['banners'])) ? $cfg['banners'] : $default_banners;
+    while (count($admin_banners) < 3) {
+        $admin_banners[] = ['pill' => '', 'title' => '', 'desc' => '', 'btn_text' => '', 'btn_link' => ''];
+    }
+  ?>
   <div class="box">
-    <h4>🏪 Store Front Settings (Global Discount & Minimum Order)</h4>
-    <p style="font-size:12px;color:#555;margin:6px 0 12px;">Selling Rate is automatically calculated as: <b>MRP − (MRP × Discount % / 100)</b>.</p>
+    <h4>🏪 Store Front Settings (Discount, Min Order & Auto-Scroll Banners)</h4>
+    <p style="font-size:12px;color:#555;margin:6px 0 12px;">Selling Rate is calculated as: <b>MRP − (MRP × Discount % / 100)</b>. Use <b>{DISC}</b> or <b>{MIN}</b> inside banner text to auto-insert live values.</p>
     <form method="POST">
       <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars($_SESSION['csrf_token']); ?>">
-      <div class="grid-2">
+      <div class="grid-3">
         <div>
           <label style="font-size:12px;font-weight:bold;">Store Front Discount (%)</label><br>
           <input type="number" step="0.01" min="0" max="99" name="discount_pct" value="<?php echo htmlspecialchars((string)$cfg['discount_pct']); ?>" required style="width:100%;">
@@ -672,8 +725,46 @@ $json_flags = JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP;
           <label style="font-size:12px;font-weight:bold;">Minimum Order Amount (₹)</label><br>
           <input type="number" min="0" name="min_order" value="<?php echo htmlspecialchars((string)$cfg['min_order']); ?>" required style="width:100%;">
         </div>
+        <div>
+          <label style="font-size:12px;font-weight:bold;">Banner Auto-Scroll (Seconds)</label><br>
+          <input type="number" min="2" max="30" name="banner_interval" value="<?php echo (int)($cfg['banner_interval'] ?? 4); ?>" required style="width:100%;">
+        </div>
       </div>
-      <button type="submit" name="save_store" style="background:#2b9348;margin-top:10px;">Save Store Front Settings</button>
+
+      <hr style="border:none;border-top:1px solid #ddd;margin:16px 0;">
+      <h4 style="margin-bottom:8px;">🎞️ Home Page Auto-Scroll Banners (Leave Title blank to hide a slide)</h4>
+
+      <?php foreach ($admin_banners as $bi => $bn): ?>
+      <div class="chg-card" style="margin-bottom:10px;">
+        <strong style="font-size:13px;color:#d90429;">Slide #<?php echo $bi + 1; ?></strong>
+        <div class="grid-2" style="margin-top:6px;">
+          <div>
+            <label style="font-size:11px;font-weight:bold;">Top Badge / Pill Text</label>
+            <input type="text" name="b_pill[]" value="<?php echo htmlspecialchars($bn['pill'] ?? ''); ?>" placeholder="e.g. 🎆 Sivakasi Factory Direct" style="width:100%;">
+          </div>
+          <div>
+            <label style="font-size:11px;font-weight:bold;">Main Banner Heading <?php echo $bi === 0 ? '*' : '(Optional)'; ?></label>
+            <input type="text" name="b_title[]" value="<?php echo htmlspecialchars($bn['title'] ?? ''); ?>" placeholder="e.g. Flat {DISC}% Diwali Factory Offer" <?php echo $bi === 0 ? 'required' : ''; ?> style="width:100%;">
+          </div>
+        </div>
+        <div style="margin-top:4px;">
+          <label style="font-size:11px;font-weight:bold;">Description Text</label>
+          <input type="text" name="b_desc[]" value="<?php echo htmlspecialchars($bn['desc'] ?? ''); ?>" placeholder="Short promotional subtitle..." style="width:100%;">
+        </div>
+        <div class="grid-2" style="margin-top:4px;">
+          <div>
+            <label style="font-size:11px;font-weight:bold;">Button Label</label>
+            <input type="text" name="b_btn_text[]" value="<?php echo htmlspecialchars($bn['btn_text'] ?? ''); ?>" placeholder="e.g. ⚡ Open Quick Price List →" style="width:100%;">
+          </div>
+          <div>
+            <label style="font-size:11px;font-weight:bold;">Button Link</label>
+            <input type="text" name="b_btn_link[]" value="<?php echo htmlspecialchars($bn['btn_link'] ?? ''); ?>" placeholder="e.g. quick-shop.php or combo.php" style="width:100%;">
+          </div>
+        </div>
+      </div>
+      <?php endforeach; ?>
+
+      <button type="submit" name="save_store" style="background:#2b9348;margin-top:6px;padding:10px 16px;">💾 Save Store Front & Banners</button>
     </form>
   </div>
   <?php endif; ?>
