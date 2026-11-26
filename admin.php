@@ -241,7 +241,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
         }
 
-        // 2. Save Store Front Discount %, Min Order & Banners
+        // 2. Save Store Front Discount %, Min Order & Dynamic Banners (with Background Image Upload)
         if (isset($_POST['save_store'])) {
             $tab = 'store';
             $new_disc = max(0, min(99, (float)($_POST['discount_pct'] ?? 0)));
@@ -250,24 +250,55 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $cfg['banner_interval'] = max(2, min(30, (int)($_POST['banner_interval'] ?? 4)));
 
             $updated_banners = [];
-            $b_pills = $_POST['b_pill'] ?? [];
+            $b_pills  = $_POST['b_pill'] ?? [];
             $b_titles = $_POST['b_title'] ?? [];
-            $b_descs = $_POST['b_desc'] ?? [];
-            $b_btns = $_POST['b_btn_text'] ?? [];
-            $b_links = $_POST['b_btn_link'] ?? [];
+            $b_descs  = $_POST['b_desc'] ?? [];
+            $b_btns   = $_POST['b_btn_text'] ?? [];
+            $b_links  = $_POST['b_btn_link'] ?? [];
+            $b_imgs   = $_POST['b_bg_image'] ?? [];
 
-            for ($bi = 0; $bi < 3; $bi++) {
+            $upload_dir = __DIR__ . '/uploads/banners/';
+            $allowed_ext = ['jpg', 'jpeg', 'png', 'webp', 'gif'];
+
+            $slide_count = count($b_titles);
+            for ($bi = 0; $bi < $slide_count; $bi++) {
                 $title = trim((string)($b_titles[$bi] ?? ''));
-                if ($title !== '') {
-                    $updated_banners[] = [
-                        'pill'     => trim((string)($b_pills[$bi] ?? '')),
-                        'title'    => $title,
-                        'desc'     => trim((string)($b_descs[$bi] ?? '')),
-                        'btn_text' => trim((string)($b_btns[$bi] ?? 'Shop Now →')) ?: 'Shop Now →',
-                        'btn_link' => trim((string)($b_links[$bi] ?? 'quick-shop.php')) ?: 'quick-shop.php'
-                    ];
+                if ($title === '') {
+                    continue;
                 }
+
+                $bg_url = trim((string)($b_imgs[$bi] ?? ''));
+
+                // Handle optional file upload for this slide
+                if (
+                    isset($_FILES['b_bg_file']['error'][$bi]) &&
+                    $_FILES['b_bg_file']['error'][$bi] === UPLOAD_ERR_OK &&
+                    !empty($_FILES['b_bg_file']['tmp_name'][$bi])
+                ) {
+                    $orig_name = (string)$_FILES['b_bg_file']['name'][$bi];
+                    $ext = strtolower(pathinfo($orig_name, PATHINFO_EXTENSION));
+                    $size = (int)$_FILES['b_bg_file']['size'][$bi];
+                    if (in_array($ext, $allowed_ext, true) && $size <= 5 * 1024 * 1024) {
+                        if (!is_dir($upload_dir)) {
+                            mkdir($upload_dir, 0755, true);
+                        }
+                        $new_file = 'banner_' . date('Ymd_His') . '_' . $bi . '_' . bin2hex(random_bytes(3)) . '.' . $ext;
+                        if (move_uploaded_file($_FILES['b_bg_file']['tmp_name'][$bi], $upload_dir . $new_file)) {
+                            $bg_url = 'uploads/banners/' . $new_file;
+                        }
+                    }
+                }
+
+                $updated_banners[] = [
+                    'pill'     => trim((string)($b_pills[$bi] ?? '')),
+                    'title'    => $title,
+                    'desc'     => trim((string)($b_descs[$bi] ?? '')),
+                    'btn_text' => trim((string)($b_btns[$bi] ?? 'Shop Now →')) ?: 'Shop Now →',
+                    'btn_link' => trim((string)($b_links[$bi] ?? 'quick-shop.php')) ?: 'quick-shop.php',
+                    'bg_image' => $bg_url
+                ];
             }
+
             $cfg['banners'] = !empty($updated_banners) ? $updated_banners : $default_banners;
             save_settings($cfg);
 
@@ -707,14 +738,11 @@ $json_flags = JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP;
 
   <?php if ($tab === 'store'):
     $admin_banners = (!empty($cfg['banners']) && is_array($cfg['banners'])) ? $cfg['banners'] : $default_banners;
-    while (count($admin_banners) < 3) {
-        $admin_banners[] = ['pill' => '', 'title' => '', 'desc' => '', 'btn_text' => '', 'btn_link' => ''];
-    }
   ?>
   <div class="box">
     <h4>🏪 Store Front Settings (Discount, Min Order & Auto-Scroll Banners)</h4>
     <p style="font-size:12px;color:#555;margin:6px 0 12px;">Selling Rate is calculated as: <b>MRP − (MRP × Discount % / 100)</b>. Use <b>{DISC}</b> or <b>{MIN}</b> inside banner text to auto-insert live values.</p>
-    <form method="POST">
+    <form method="POST" enctype="multipart/form-data">
       <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars($_SESSION['csrf_token']); ?>">
       <div class="grid-3">
         <div>
@@ -732,37 +760,61 @@ $json_flags = JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP;
       </div>
 
       <hr style="border:none;border-top:1px solid #ddd;margin:16px 0;">
-      <h4 style="margin-bottom:8px;">🎞️ Home Page Auto-Scroll Banners (Leave Title blank to hide a slide)</h4>
-
-      <?php foreach ($admin_banners as $bi => $bn): ?>
-      <div class="chg-card" style="margin-bottom:10px;">
-        <strong style="font-size:13px;color:#d90429;">Slide #<?php echo $bi + 1; ?></strong>
-        <div class="grid-2" style="margin-top:6px;">
-          <div>
-            <label style="font-size:11px;font-weight:bold;">Top Badge / Pill Text</label>
-            <input type="text" name="b_pill[]" value="<?php echo htmlspecialchars($bn['pill'] ?? ''); ?>" placeholder="e.g. 🎆 Sivakasi Factory Direct" style="width:100%;">
-          </div>
-          <div>
-            <label style="font-size:11px;font-weight:bold;">Main Banner Heading <?php echo $bi === 0 ? '*' : '(Optional)'; ?></label>
-            <input type="text" name="b_title[]" value="<?php echo htmlspecialchars($bn['title'] ?? ''); ?>" placeholder="e.g. Flat {DISC}% Diwali Factory Offer" <?php echo $bi === 0 ? 'required' : ''; ?> style="width:100%;">
-          </div>
-        </div>
-        <div style="margin-top:4px;">
-          <label style="font-size:11px;font-weight:bold;">Description Text</label>
-          <input type="text" name="b_desc[]" value="<?php echo htmlspecialchars($bn['desc'] ?? ''); ?>" placeholder="Short promotional subtitle..." style="width:100%;">
-        </div>
-        <div class="grid-2" style="margin-top:4px;">
-          <div>
-            <label style="font-size:11px;font-weight:bold;">Button Label</label>
-            <input type="text" name="b_btn_text[]" value="<?php echo htmlspecialchars($bn['btn_text'] ?? ''); ?>" placeholder="e.g. ⚡ Open Quick Price List →" style="width:100%;">
-          </div>
-          <div>
-            <label style="font-size:11px;font-weight:bold;">Button Link</label>
-            <input type="text" name="b_btn_link[]" value="<?php echo htmlspecialchars($bn['btn_link'] ?? ''); ?>" placeholder="e.g. quick-shop.php or combo.php" style="width:100%;">
-          </div>
-        </div>
+      <div class="toolbar">
+        <h4 style="margin:0;">🎞️ Home Page Auto-Scroll Banners</h4>
+        <button type="button" onclick="addBannerSlide()" style="background:#0077b6;padding:7px 12px;">➕ Add Slide</button>
       </div>
-      <?php endforeach; ?>
+
+      <div id="slidesContainer">
+        <?php foreach ($admin_banners as $bi => $bn): ?>
+        <div class="chg-card slide-editor" style="margin-bottom:10px;">
+          <div style="display:flex;justify-content:space-between;align-items:center;">
+            <strong class="slide-num" style="font-size:13px;color:#d90429;">Slide #<?php echo $bi + 1; ?></strong>
+            <button type="button" onclick="removeBannerSlide(this)" class="btn-sm" style="background:#c92a2a;">🗑️ Remove</button>
+          </div>
+          <div class="grid-2" style="margin-top:6px;">
+            <div>
+              <label style="font-size:11px;font-weight:bold;">Top Badge / Pill Text</label>
+              <input type="text" name="b_pill[]" value="<?php echo htmlspecialchars($bn['pill'] ?? ''); ?>" placeholder="e.g. 🎆 Sivakasi Factory Direct" style="width:100%;">
+            </div>
+            <div>
+              <label style="font-size:11px;font-weight:bold;">Main Banner Heading *</label>
+              <input type="text" name="b_title[]" value="<?php echo htmlspecialchars($bn['title'] ?? ''); ?>" placeholder="e.g. Flat {DISC}% Diwali Factory Offer" required style="width:100%;">
+            </div>
+          </div>
+          <div style="margin-top:4px;">
+            <label style="font-size:11px;font-weight:bold;">Description Text</label>
+            <input type="text" name="b_desc[]" value="<?php echo htmlspecialchars($bn['desc'] ?? ''); ?>" placeholder="Short promotional subtitle..." style="width:100%;">
+          </div>
+          <div class="grid-2" style="margin-top:4px;">
+            <div>
+              <label style="font-size:11px;font-weight:bold;">Button Label</label>
+              <input type="text" name="b_btn_text[]" value="<?php echo htmlspecialchars($bn['btn_text'] ?? ''); ?>" placeholder="e.g. ⚡ Open Quick Price List →" style="width:100%;">
+            </div>
+            <div>
+              <label style="font-size:11px;font-weight:bold;">Button Link</label>
+              <input type="text" name="b_btn_link[]" value="<?php echo htmlspecialchars($bn['btn_link'] ?? ''); ?>" placeholder="e.g. quick-shop.php or combo.php" style="width:100%;">
+            </div>
+          </div>
+          <div class="grid-2" style="margin-top:4px;">
+            <div>
+              <label style="font-size:11px;font-weight:bold;">Background Image URL (Optional)</label>
+              <input type="text" name="b_bg_image[]" value="<?php echo htmlspecialchars($bn['bg_image'] ?? ''); ?>" placeholder="https://... or uploads/banners/img.jpg" style="width:100%;">
+            </div>
+            <div>
+              <label style="font-size:11px;font-weight:bold;">Or Upload Background Image (JPG/PNG/WebP, max 5MB)</label>
+              <input type="file" name="b_bg_file[]" accept="image/jpeg,image/png,image/webp,image/gif" style="width:100%;background:#fff;">
+            </div>
+          </div>
+          <?php if (!empty($bn['bg_image'])): ?>
+            <div style="margin-top:6px;display:flex;align-items:center;gap:10px;">
+              <img src="<?php echo htmlspecialchars($bn['bg_image']); ?>" alt="Banner Preview" style="height:46px;width:90px;object-fit:cover;border-radius:4px;border:1px solid #ccc;">
+              <small style="color:#555;">Current: <?php echo htmlspecialchars($bn['bg_image']); ?></small>
+            </div>
+          <?php endif; ?>
+        </div>
+        <?php endforeach; ?>
+      </div>
 
       <button type="submit" name="save_store" style="background:#2b9348;margin-top:6px;padding:10px 16px;">💾 Save Store Front & Banners</button>
     </form>
@@ -1212,6 +1264,60 @@ $json_flags = JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP;
     if (WALKIN_SAVED) {
       openPrintWindow(buildEstimateHTML(WALKIN_SAVED));
     }
+    
+        function renumberSlides() {
+      document.querySelectorAll("#slidesContainer .slide-editor").forEach(function(card, idx) {
+        const lbl = card.querySelector(".slide-num");
+        if (lbl) lbl.innerText = "Slide #" + (idx + 1);
+      });
+    }
+
+    function addBannerSlide() {
+      const container = document.getElementById("slidesContainer");
+      if (!container) return;
+      const idx = container.querySelectorAll(".slide-editor").length + 1;
+      const div = document.createElement("div");
+      div.className = "chg-card slide-editor";
+      div.style.marginBottom = "10px";
+      div.innerHTML =
+        '<div style="display:flex;justify-content:space-between;align-items:center;">' +
+          '<strong class="slide-num" style="font-size:13px;color:#d90429;">Slide #' + idx + '</strong>' +
+          '<button type="button" onclick="removeBannerSlide(this)" class="btn-sm" style="background:#c92a2a;">🗑️ Remove</button>' +
+        '</div>' +
+        '<div class="grid-2" style="margin-top:6px;">' +
+          '<div><label style="font-size:11px;font-weight:bold;">Top Badge / Pill Text</label>' +
+          '<input type="text" name="b_pill[]" placeholder="e.g. 🎆 Sivakasi Factory Direct" style="width:100%;"></div>' +
+          '<div><label style="font-size:11px;font-weight:bold;">Main Banner Heading *</label>' +
+          '<input type="text" name="b_title[]" placeholder="e.g. Flat {DISC}% Diwali Factory Offer" required style="width:100%;"></div>' +
+        '</div>' +
+        '<div style="margin-top:4px;"><label style="font-size:11px;font-weight:bold;">Description Text</label>' +
+        '<input type="text" name="b_desc[]" placeholder="Short promotional subtitle..." style="width:100%;"></div>' +
+        '<div class="grid-2" style="margin-top:4px;">' +
+          '<div><label style="font-size:11px;font-weight:bold;">Button Label</label>' +
+          '<input type="text" name="b_btn_text[]" value="Shop Now →" style="width:100%;"></div>' +
+          '<div><label style="font-size:11px;font-weight:bold;">Button Link</label>' +
+          '<input type="text" name="b_btn_link[]" value="quick-shop.php" style="width:100%;"></div>' +
+        '</div>' +
+        '<div class="grid-2" style="margin-top:4px;">' +
+          '<div><label style="font-size:11px;font-weight:bold;">Background Image URL (Optional)</label>' +
+          '<input type="text" name="b_bg_image[]" placeholder="https://..." style="width:100%;"></div>' +
+          '<div><label style="font-size:11px;font-weight:bold;">Or Upload Background Image (JPG/PNG/WebP, max 5MB)</label>' +
+          '<input type="file" name="b_bg_file[]" accept="image/jpeg,image/png,image/webp,image/gif" style="width:100%;background:#fff;"></div>' +
+        '</div>';
+      container.appendChild(div);
+    }
+
+    function removeBannerSlide(btn) {
+      const container = document.getElementById("slidesContainer");
+      if (!container) return;
+      if (container.querySelectorAll(".slide-editor").length <= 1) {
+        alert("At least 1 banner slide is required.");
+        return;
+      }
+      btn.closest(".slide-editor").remove();
+      renumberSlides();
+    }
+
   </script>
 </body>
 </html>
