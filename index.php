@@ -33,6 +33,35 @@ $DISC_PCT = (float)$cfg['discount_pct'];
 $disabled_list = isset($cfg['disabled_ids']) && is_array($cfg['disabled_ids'])
     ? array_map('intval', $cfg['disabled_ids'])
     : [];
+$default_banners = [
+    [
+        'pill' => '🎆 Sivakasi Factory Direct • {DISC}% OFF',
+        'title' => 'Flat {DISC}% Diwali Factory Offer',
+        'desc' => 'Select crackers below or use our Quick Price List to generate an instant PDF estimate & Order Tracking ID.',
+        'btn_text' => '⚡ Open Quick Price List →',
+        'btn_link' => 'quick-shop.php'
+    ],
+    [
+        'pill' => '🎁 Ready-to-Celebrate Packs',
+        'title' => 'Family Gift Boxes & Diwali Combos',
+        'desc' => 'Curated 35-item & 50-item cracker assortments packed safely for families, kids, and corporate gifting at {DISC}% factory discount.',
+        'btn_text' => '🎁 Explore Combo Packs →',
+        'btn_link' => 'combo.php'
+    ],
+    [
+        'pill' => '🚚 Min Order ₹{MIN}/- • Fast Dispatch',
+        'title' => 'Instant Estimate & Live Lorry Tracking',
+        'desc' => 'Submit your estimate in 60 seconds, get a phone confirmation within 2 hours, and track your transport LR details anytime.',
+        'btn_text' => '📦 Track Your Order →',
+        'btn_link' => 'track-order.php'
+    ]
+];
+$banners = (!empty($cfg['banners']) && is_array($cfg['banners'])) ? $cfg['banners'] : $default_banners;
+$banner_ms = max(2, min(30, (int)($cfg['banner_interval'] ?? 4))) * 1000;
+
+function format_banner_txt(string $str, float $disc, int $min): string {
+    return str_replace(['{DISC}', '{MIN}'], [(string)$disc, number_format($min)], $str);
+}
 
 $products = [];
 $categories = [];
@@ -166,10 +195,32 @@ $json_flags = JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP;
     .nav-bar a:hover, .nav-bar a.active { color: var(--accent); }
     .cart-btn { background: var(--accent); color: #000; border: none; padding: 9px 14px; border-radius: 6px; font-weight: bold; cursor: pointer; font-size: 13px; }
     .err-banner { background: #ffe3e3; color: #c92a2a; padding: 10px 4%; text-align: center; font-weight: bold; font-size: 13px; border-bottom: 1px solid #ffa8a8; }
-    .hero { background: linear-gradient(135deg, #3a000a, #780015); color: #fff; text-align: center; padding: 30px 4%; }
+   /* .hero { background: linear-gradient(135deg, #3a000a, #780015); color: #fff; text-align: center; padding: 30px 4%; }
     .hero h2 { font-size: 26px; color: var(--accent); margin-bottom: 6px; }
     .hero p { font-size: 14px; color: #f1f3f5; max-width: 650px; margin: 0 auto 14px; }
-    .hero-cta { display: inline-block; background: var(--accent); color: #000; padding: 9px 18px; border-radius: 6px; font-weight: bold; font-size: 13px; text-decoration: none; }
+    .hero-cta { display: inline-block; background: var(--accent); color: #000; padding: 9px 18px; border-radius: 6px; font-weight: bold; font-size: 13px; text-decoration: none; } */  
+       $disabled_list$disabled_list /* Interactive Banner Widget */
+    .banner-widget { position: relative; overflow: hidden; background: #2b0509; color: #fff; }
+    .banner-track { display: flex; transition: transform 0.45s ease-in-out; }
+    .banner-slide { min-width: 100%; padding: 34px 10%; text-align: center; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 220px; }
+    .slide-1 { background: radial-gradient(circle at top right, #9e001c, #3a000a 75%); }
+    .slide-2 { background: radial-gradient(circle at top left, #780015, #1d1e22 80%); }
+    .slide-3 { background: radial-gradient(circle at bottom right, #590d22, #2b0509 75%); }
+    .banner-pill { background: rgba(255, 183, 3, 0.18); border: 1px solid var(--accent); color: var(--accent); font-size: 11px; font-weight: bold; padding: 4px 12px; border-radius: 20px; text-transform: uppercase; letter-spacing: 0.6px; margin-bottom: 10px; }
+    .banner-slide h2 { font-size: 26px; color: var(--accent); margin-bottom: 8px; line-height: 1.25; }
+    .banner-slide p { font-size: 14px; color: #f1f3f5; max-width: 640px; margin: 0 auto 16px; line-height: 1.5; }
+    .banner-actions { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; }
+    .hero-cta { display: inline-block; background: var(--accent); color: #000; padding: 10px 18px; border-radius: 6px; font-weight: bold; font-size: 13px; text-decoration: none; transition: transform 0.15s; }
+    .hero-cta:hover { transform: translateY(-1px); }
+    .hero-cta.sec { background: rgba(255,255,255,0.12); color: #fff; border: 1px solid rgba(255,255,255,0.35); }
+    .b-nav { position: absolute; top: 50%; transform: translateY(-50%); background: rgba(0,0,0,0.45); color: #fff; border: 1px solid rgba(255,255,255,0.2); width: 34px; height: 34px; border-radius: 50%; font-size: 18px; cursor: pointer; z-index: 10; display: flex; align-items: center; justify-content: center; }
+    .b-nav:hover { background: var(--accent); color: #000; }
+    .b-prev { left: 12px; }
+    .b-next { right: 12px; }
+    .b-dots { position: absolute; bottom: 10px; left: 50%; transform: translateX(-50%); display: flex; gap: 7px; z-index: 10; }
+    .b-dot { width: 9px; height: 9px; border-radius: 50%; background: rgba(255,255,255,0.4); border: none; cursor: pointer; padding: 0; }
+    .b-dot.active { background: var(--accent); width: 22px; border-radius: 5px; }
+    @media (max-width: 600px) { .banner-slide { padding: 28px 12%; min-height: 200px; } .banner-slide h2 { font-size: 21px; } }
     .controls { max-width: 1100px; margin: 16px auto; padding: 0 4%; }
     .search { width: 100%; padding: 11px 14px; border: 1px solid var(--border); border-radius: 8px; margin-bottom: 10px; font-size: 14px; }
     .cats { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 6px; }
@@ -238,10 +289,50 @@ $json_flags = JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP;
     <div class="err-banner">⚠️ <?php echo htmlspecialchars($order_err); ?></div>
   <?php endif; ?>
 
-  <section class="hero">
+  <!--section class="hero">
     <h2>Flat <?php echo $DISC_PCT; ?>% Diwali Factory Offer</h2>
     <p>Select crackers below or use our Quick Price List to generate an instant estimate & Order Tracking ID from <?php echo htmlspecialchars($SHOP_NAME); ?>.</p>
     <a href="quick-shop.php" class="hero-cta">⚡ Open Table Quick Price List →</a>
+  </section-->
+  
+    <section class="banner-widget" id="bannerWidget" onmouseenter="pauseBanner()" onmouseleave="resumeBanner()">
+    <?php if (count($banners) > 1): ?>
+      <button type="button" class="b-nav b-prev" onclick="moveBanner(-1)" aria-label="Previous Banner">‹</button>
+      <button type="button" class="b-nav b-next" onclick="moveBanner(1)" aria-label="Next Banner">›</button>
+    <?php endif; ?>
+
+    <div class="banner-track" id="bannerTrack">
+      <?php foreach ($banners as $idx => $bn):
+        $slide_cls = 'slide-' . (($idx % 3) + 1);
+        $pill = format_banner_txt((string)($bn['pill'] ?? ''), $DISC_PCT, $MIN_ORDER);
+        $title = format_banner_txt((string)($bn['title'] ?? ''), $DISC_PCT, $MIN_ORDER);
+        $desc = format_banner_txt((string)($bn['desc'] ?? ''), $DISC_PCT, $MIN_ORDER);
+        $btn_txt = format_banner_txt((string)($bn['btn_text'] ?? 'Shop Now →'), $DISC_PCT, $MIN_ORDER);
+        $btn_lnk = (string)($bn['btn_link'] ?? 'quick-shop.php');
+      ?>
+      <div class="banner-slide <?php echo $slide_cls; ?>">
+        <?php if ($pill !== ''): ?>
+          <span class="banner-pill"><?php echo htmlspecialchars($pill); ?></span>
+        <?php endif; ?>
+        <h2><?php echo htmlspecialchars($title); ?></h2>
+        <?php if ($desc !== ''): ?>
+          <p><?php echo htmlspecialchars($desc); ?></p>
+        <?php endif; ?>
+        <div class="banner-actions">
+          <a href="<?php echo htmlspecialchars($btn_lnk); ?>" class="hero-cta"><?php echo htmlspecialchars($btn_txt); ?></a>
+        </div>
+      </div>
+      <?php endforeach; ?>
+    </div>
+
+    <?php if (count($banners) > 1): ?>
+      <div class="b-dots" id="bannerDots">
+        <?php foreach ($banners as $idx => $bn): ?>
+          <button type="button" class="b-dot <?php echo $idx === 0 ? 'active' : ''; ?>" onclick="goBanner(<?php echo $idx; ?>)" aria-label="Slide <?php echo $idx + 1; ?>"></button>
+        <?php endforeach; ?>
+      </div>
+      <div class="b-progress" id="bannerProgress"></div>
+    <?php endif; ?>
   </section>
 
   <div class="controls">
@@ -558,6 +649,34 @@ $json_flags = JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP;
     function printSubmittedPDF() {
       if (!savedOrder) return;
       openPrintWindow(buildEstimateHTML(savedOrder));
+    }
+    
+   let bannerIdx = 0;
+   const totalBanners = <?php echo count($banners); ?>;
+   const SLIDE_DURATION = <?php echo $banner_ms; ?>;
+
+    function renderBanner() {
+      const track = document.getElementById("bannerTrack");
+      const dots = document.querySelectorAll(".b-dot");
+      if (!track) return;
+      track.style.transform = `translateX(-${bannerIdx * 100}%)`;
+      dots.forEach((d, i) => d.classList.toggle("active", i === bannerIdx));
+    }
+
+    function moveBanner(step) {
+      bannerIdx = (bannerIdx + step + totalBanners) % totalBanners;
+      renderBanner();
+    }
+
+    function goBanner(idx) {
+      bannerIdx = idx;
+      renderBanner();
+    }
+
+    function pauseBanner() { clearInterval(bannerTimer); }
+    function resumeBanner() {
+      clearInterval(bannerTimer);
+      bannerTimer = setInterval(() => moveBanner(1), 4500);
     }
 
     updateCart();
