@@ -202,7 +202,7 @@ $json_flags = JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP;
        /* Interactive Banner Widget */
     .banner-widget { position: relative; overflow: hidden; background: #2b0509; color: #fff; }
     .banner-track { display: flex; transition: transform 0.45s ease-in-out; }
-    .banner-slide { min-width: 100%; padding: 34px 10%; text-align: center; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 220px; }
+    .banner-slide { min-width: 100%; padding: 34px 10%; text-align: center; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 220px; background-size: cover; background-position: center; background-repeat: no-repeat; }
     .slide-1 { background: radial-gradient(circle at top right, #9e001c, #3a000a 75%); }
     .slide-2 { background: radial-gradient(circle at top left, #780015, #1d1e22 80%); }
     .slide-3 { background: radial-gradient(circle at bottom right, #590d22, #2b0509 75%); }
@@ -310,8 +310,11 @@ $json_flags = JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP;
         $desc = format_banner_txt((string)($bn['desc'] ?? ''), $DISC_PCT, $MIN_ORDER);
         $btn_txt = format_banner_txt((string)($bn['btn_text'] ?? 'Shop Now →'), $DISC_PCT, $MIN_ORDER);
         $btn_lnk = (string)($bn['btn_link'] ?? 'quick-shop.php');
+        $bg_style = $bg_img !== ''
+          ? ' style="background-image: linear-gradient(rgba(25, 0, 5, 0.68), rgba(25, 0, 5, 0.78)), url(\'' . htmlspecialchars($bg_img, ENT_QUOTES) . '\');"'
+          : '';
       ?>
-      <div class="banner-slide <?php echo $slide_cls; ?>">
+      <div class="banner-slide <?php echo $slide_cls; ?>"<?php echo $bg_style; ?>>
         <?php if ($pill !== ''): ?>
           <span class="banner-pill"><?php echo htmlspecialchars($pill); ?></span>
         <?php endif; ?>
