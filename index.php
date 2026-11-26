@@ -310,6 +310,7 @@ $json_flags = JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP;
         $desc = format_banner_txt((string)($bn['desc'] ?? ''), $DISC_PCT, $MIN_ORDER);
         $btn_txt = format_banner_txt((string)($bn['btn_text'] ?? 'Shop Now →'), $DISC_PCT, $MIN_ORDER);
         $btn_lnk = (string)($bn['btn_link'] ?? 'quick-shop.php');
+        $bg_img  = trim((string)($bn['bg_image'] ?? ''));
         $bg_style = $bg_img !== ''
           ? ' style="background-image: linear-gradient(rgba(25, 0, 5, 0.68), rgba(25, 0, 5, 0.78)), url(\'' . htmlspecialchars($bg_img, ENT_QUOTES) . '\');"'
           : '';
