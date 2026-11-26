@@ -199,7 +199,7 @@ $json_flags = JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP;
     .hero h2 { font-size: 26px; color: var(--accent); margin-bottom: 6px; }
     .hero p { font-size: 14px; color: #f1f3f5; max-width: 650px; margin: 0 auto 14px; }
     .hero-cta { display: inline-block; background: var(--accent); color: #000; padding: 9px 18px; border-radius: 6px; font-weight: bold; font-size: 13px; text-decoration: none; } */  
-       $disabled_list$disabled_list /* Interactive Banner Widget */
+       /* Interactive Banner Widget */
     .banner-widget { position: relative; overflow: hidden; background: #2b0509; color: #fff; }
     .banner-track { display: flex; transition: transform 0.45s ease-in-out; }
     .banner-slide { min-width: 100%; padding: 34px 10%; text-align: center; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 220px; }
@@ -219,6 +219,7 @@ $json_flags = JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP;
     .b-next { right: 12px; }
     .b-dots { position: absolute; bottom: 10px; left: 50%; transform: translateX(-50%); display: flex; gap: 7px; z-index: 10; }
     .b-dot { width: 9px; height: 9px; border-radius: 50%; background: rgba(255,255,255,0.4); border: none; cursor: pointer; padding: 0; }
+    .b-progress { position: absolute; bottom: 0; left: 0; height: 3px; background: var(--accent); width: 0%; z-index: 11; transition: width 0.05s linear; }
     .b-dot.active { background: var(--accent); width: 22px; border-radius: 5px; }
     @media (max-width: 600px) { .banner-slide { padding: 28px 12%; min-height: 200px; } .banner-slide h2 { font-size: 21px; } }
     .controls { max-width: 1100px; margin: 16px auto; padding: 0 4%; }
@@ -651,9 +652,11 @@ $json_flags = JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP;
       openPrintWindow(buildEstimateHTML(savedOrder));
     }
     
-   let bannerIdx = 0;
-   const totalBanners = <?php echo count($banners); ?>;
-   const SLIDE_DURATION = <?php echo $banner_ms; ?>;
+     let bannerIdx = 0;
+    const totalBanners = <?php echo count($banners); ?>;
+    const SLIDE_DURATION = <?php echo $banner_ms; ?>;
+    let elapsed = 0;
+    let isBannerPaused = false;
 
     function renderBanner() {
       const track = document.getElementById("bannerTrack");
@@ -661,6 +664,9 @@ $json_flags = JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP;
       if (!track) return;
       track.style.transform = `translateX(-${bannerIdx * 100}%)`;
       dots.forEach((d, i) => d.classList.toggle("active", i === bannerIdx));
+      elapsed = 0;
+      const bar = document.getElementById("bannerProgress");
+      if (bar) bar.style.width = "0%";
     }
 
     function moveBanner(step) {
@@ -673,11 +679,21 @@ $json_flags = JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP;
       renderBanner();
     }
 
-    function pauseBanner() { clearInterval(bannerTimer); }
-    function resumeBanner() {
-      clearInterval(bannerTimer);
-      bannerTimer = setInterval(() => moveBanner(1), 4500);
+    function pauseBanner() { isBannerPaused = true; }
+    function resumeBanner() { isBannerPaused = false; }
+
+    if (totalBanners > 1) {
+      setInterval(() => {
+        if (isBannerPaused || document.hidden) return;
+        elapsed += 50;
+        const bar = document.getElementById("bannerProgress");
+        if (bar) bar.style.width = Math.min(100, (elapsed / SLIDE_DURATION) * 100) + "%";
+        if (elapsed >= SLIDE_DURATION) {
+          moveBanner(1);
+        }
+      }, 50);
     }
+
 
     updateCart();
   </script>
